@@ -1,0 +1,698 @@
+================================================================================
+FUNDING RATE ARBITRAGE (CASH-AND-CARRY)
+ALGORITHMIC TRADING BOT — BUILD INSTRUCTIONS
+================================================================================
+Version: 1.0
+Classification: Proprietary — Quantitative Trading Desk
+Strategy ID: STRAT-002-FUNDING-ARB
+================================================================================
+
+TABLE OF CONTENTS
+1.  Strategy Overview
+2.  Required Data Streams
+3.  Entry Logic
+4.  Exit Logic
+5.  Risk Management Rules
+6.  Position Sizing Rules
+7.  Filters & Disqualifiers
+8.  24/7 Operation Handling
+9.  Paper Trading Specifications
+10. Performance Metrics
+11. Edge Cases & Failure Modes
+12. Dependencies & Integration Points
+
+================================================================================
+SECTION 1: STRATEGY OVERVIEW
+================================================================================
+
+1.1 WHAT THIS STRATEGY DOES
+
+This strategy captures the funding rate premium paid by perpetual futures
+long holders to short holders. It maintains a delta-neutral position by
+simultaneously holding LONG spot and SHORT perpetual futures of the same
+asset in equal notional amounts. The profit comes exclusively from funding
+rate payments, not from directional price movement.
+
+1.2 MARKET CONDITIONS TARGETED
+
+- Bullish or neutral market sentiment where perpetual futures trade at a
+  premium to spot (positive funding rate)
+- Periods of high leveraged long demand (strong positive funding)
+- Avoids periods of negative or near-zero funding rates
+- Works best during sustained uptrends where retail longs dominate
+
+1.3 THEORETICAL EDGE
+
+- Funding rates are structurally positive: data shows positive funding over
+  92% of the time, with a baseline of +0.01% per 8-hour period embedded in
+  the Binance funding formula
+- Annualized baseline yield: 0.01% × 3 × 365 = 10.95%
+- During bullish periods, rates frequently spike to 0.05-0.3% per 8 hours
+  (annualized 54-328%)
+- The edge is market-structure driven, not directional, making it one of the
+  most consistent strategies available
+- BIS Working Paper documents average annualized crypto carry of 6-8%
+  (2019-2024), frequently exceeding 20% during demand surges
+
+1.4 TARGET INSTRUMENTS
+
+Primary: BTC/USDT (spot + BTCUSDT perpetual)
+Secondary: ETH/USDT (spot + ETHUSDT perpetual)
+Tertiary: SOL/USDT, BNB/USDT, XRP/USDT (spot + perpetual)
+Maximum instruments: 5 simultaneously
+Selection criteria: instruments with highest current predicted funding AND
+sufficient spot + futures liquidity
+
+1.5 FUNDING RATE MECHANICS
+
+- Binance funding payments occur every 8 hours at 00:00, 08:00, 16:00 UTC
+- Payment = Position Notional × Funding Rate
+- If funding rate is POSITIVE: longs pay shorts (profitable for this strategy)
+- If funding rate is NEGATIVE: shorts pay longs (costly for this strategy)
+- Funding rate = Premium Index + clamp(Interest Rate - Premium Index, ±0.05%)
+- Interest Rate component = 0.01% per 8 hours (structural positive bias)
+- The predicted next funding rate is available in real-time via WebSocket
+
+================================================================================
+SECTION 2: REQUIRED DATA STREAMS
+================================================================================
+
+2.1 WEBSOCKET STREAMS (via Unified WebSocket Manager)
+
+Mark Price and Funding Streams:
+- <symbol>@markPrice@1s — Mark price, index price, and CURRENT estimated
+  funding rate updated every second. This is the PRIMARY data source.
+
+Book Ticker Streams (for execution):
+- <symbol>@bookTicker (SPOT) — Best bid/ask on spot market
+- <symbol>@bookTicker (FUTURES) — Best bid/ask on futures market
+- These two streams are compared to calculate the live basis spread
+
+Kline Streams:
+- <symbol>@kline_1h — For trend context and volatility measurement
+- <symbol>@kline_1d — For regime classification
+
+Order Book Depth:
+- <symbol>@depth20@100ms (SPOT) — Liquidity assessment for spot leg
+- <symbol>@depth20@100ms (FUTURES) — Liquidity assessment for futures leg
+
+Aggregated Trades:
+- <symbol>@aggTrade (FUTURES) — For detecting large liquidation cascades
+
+Forced Liquidation Stream:
+- <symbol>@forceOrder — Monitor for liquidation cascade risks
+
+Total streams per instrument: 8 (4 spot + 4 futures equivalent)
+Maximum instruments: 5
+Maximum total streams: 40
+
+2.2 REST API ENDPOINTS
+
+Market Data:
+- GET /fapi/v1/premiumIndex — Current funding rate, predicted rate, next
+  funding time. Weight: 1. Called every 60 seconds per instrument.
+- GET /fapi/v1/fundingRate — Historical funding rates (warm-up).
+  Weight: 1. Called on startup: last 500 entries per instrument.
+- GET /api/v3/ticker/bookTicker — Spot best bid/ask (fallback).
+  Weight: 1 per symbol.
+- GET /fapi/v1/ticker/bookTicker — Futures best bid/ask (fallback).
+  Weight: 1 per symbol.
+
+Account:
+- GET /fapi/v2/account — Futures account positions and balances.
+  Weight: 5. Called every 30 seconds and after every fill.
+- GET /api/v3/account — Spot account balances.
+  Weight: 10. Called every 30 seconds and after every fill.
+- GET /fapi/v1/income — Funding fee income history.
+  Weight: 30. Called every 8 hours after funding settlement to reconcile.
+
+Order Management:
+- POST /fapi/v1/order — Futures order placement. Weight: 1.
+- POST /api/v3/order — Spot order placement. Weight: 1.
+- DELETE /fapi/v1/order — Futures order cancellation. Weight: 1.
+- DELETE /api/v3/order — Spot order cancellation. Weight: 1.
+
+2.3 USER DATA STREAMS
+
+- Futures user data stream: ORDER_TRADE_UPDATE, ACCOUNT_UPDATE
+- Spot user data stream: executionReport, outboundAccountPosition
+- Both must be active simultaneously for position reconciliation
+
+================================================================================
+SECTION 3: ENTRY LOGIC
+================================================================================
+
+3.1 FUNDING RATE THRESHOLD FOR ENTRY
+
+The strategy enters a position ONLY when the predicted funding rate exceeds
+a minimum threshold that ensures profitability after all costs.
+
+Step 1: Calculate Minimum Viable Funding Rate
+- Total round-trip cost = Spot entry fee + Spot exit fee + Futures entry fee
+  + Futures exit fee + estimated slippage
+- Spot fees: Taker 0.10% (or current tier) × 2 legs = 0.20%
+- Futures fees: Taker 0.04% (or current tier) × 2 legs = 0.08%
+- Estimated slippage: 0.02% per leg × 4 legs = 0.08%
+- Total round-trip cost: approximately 0.36%
+- Minimum position holding periods: 3 funding periods (24 hours)
+- Minimum funding rate to cover costs: 0.36% / 3 = 0.12% per period
+- Add safety margin of 50%: Minimum entry threshold = 0.18% per 8-hour period
+  (annualized ~197%)
+
+Step 2: Dynamic Threshold Adjustment
+- The 0.18% threshold above is the AGGRESSIVE entry threshold
+- STANDARD entry threshold: predicted funding rate > 0.05% per period
+  (expected holding time: 7+ funding periods to recoup costs)
+- CONSERVATIVE entry threshold: predicted funding rate > 0.03% per period
+  (expected holding time: 12+ funding periods to recoup costs)
+- Default mode: STANDARD (0.05%)
+- Mode selection is configurable via dashboard
+
+Step 3: Funding Rate Trend Check
+- Calculate the 24-hour average funding rate (last 3 funding periods)
+- Calculate the 7-day average funding rate (last 21 funding periods)
+- ENTRY CONDITION: Predicted rate > threshold AND 24h average > 50% of threshold
+  AND 7-day average is positive
+- This prevents entering on a single spike that may not sustain
+
+3.2 BASIS SPREAD CHECK
+
+Step 4: Calculate Current Basis
+- Basis = (Futures Mark Price − Spot Index Price) / Spot Index Price × 100%
+- Fetch from markPrice stream: markPrice vs indexPrice fields
+- ENTRY CONDITION: Basis must be POSITIVE (futures trading at premium to spot)
+  AND Basis > 0.01% (not effectively zero)
+
+Step 5: Basis Trend
+- Track basis values every minute for the last 24 hours
+- Calculate 1-hour and 4-hour rolling average basis
+- ENTRY CONDITION: 1-hour average basis must be positive AND not declining
+  (current hour > previous hour, or stable within 0.01%)
+- If basis is contracting rapidly (dropped more than 50% in 4 hours), do NOT
+  enter — the premium is evaporating
+
+3.3 SIMULTANEOUS EXECUTION PROTOCOL
+
+The critical challenge is executing both legs (spot buy + futures short)
+simultaneously to minimize basis risk during entry.
+
+Step 6: Pre-Entry Checks
+- Verify sufficient USDT balance in BOTH spot and futures wallets
+- Verify both order books have adequate depth at current levels:
+  Required depth at best 3 levels > 2x intended order size
+- Verify bid-ask spread on both spot and futures is < 0.05% of mid-price
+- Verify system clock is synchronized with Binance (offset < 500ms)
+
+Step 7: Execution Sequence
+- Calculate exact quantities for both legs:
+  Spot: Buy X units of the base asset (e.g., 0.1 BTC)
+  Futures: Short X units equivalent notional in perpetual contract
+  Quantities must match to within 0.1% of notional value
+- Place BOTH orders within a 100ms window:
+  Order 1: Spot MARKET buy
+  Order 2: Futures MARKET sell (open short)
+- If either order fails to submit within 100ms, immediately cancel the other
+  if not yet filled
+
+Step 8: Fill Reconciliation
+- After both fills confirmed, calculate actual basis captured:
+  Actual Basis = (Futures Fill Price − Spot Fill Price) / Spot Fill Price
+- Log: intended basis, actual basis, slippage per leg, total execution cost
+- If actual basis is more than 0.05% worse than intended, flag for review
+  but do NOT unwind (the position is still likely profitable)
+
+Step 9: Delta Neutrality Verification
+- After entry, verify the position is delta-neutral:
+  Spot notional = Spot quantity × Spot price
+  Futures notional = Futures quantity × Futures mark price
+  Delta = Spot notional − abs(Futures notional)
+- Acceptable delta: within 0.5% of total notional
+- If delta exceeds 0.5%, place a corrective order on the leg that is smaller
+
+================================================================================
+SECTION 4: EXIT LOGIC
+================================================================================
+
+4.1 FUNDING RATE REVERSAL EXIT
+
+- Monitor predicted funding rate continuously via markPrice stream
+- EXIT TRIGGER: Predicted funding rate turns NEGATIVE (below −0.005%)
+  AND stays negative for 2 consecutive funding periods
+- For STANDARD mode: Exit if predicted rate drops below +0.01% for 3
+  consecutive periods (below the structural baseline — not worth the capital)
+- For AGGRESSIVE mode: Exit only if rate goes negative
+- For CONSERVATIVE mode: Exit if predicted rate drops below +0.02% for 2
+  consecutive periods
+
+4.2 BASIS CONVERGENCE/INVERSION EXIT
+
+- EXIT TRIGGER: Basis (futures − spot) drops below −0.05% (futures trading
+  at discount to spot — inversion)
+- If basis inverts, the strategy is paying for the inversion AND potentially
+  facing negative funding — exit immediately
+- Gradual exit: If basis drops below +0.01% for 4+ hours, begin unwinding
+  25% of position every 2 hours
+
+4.3 SIMULTANEOUS UNWINDING PROTOCOL
+
+Exit must close both legs simultaneously to maintain delta neutrality:
+
+Step 1: Place both closing orders within a 100ms window:
+  Spot: MARKET sell all held units
+  Futures: MARKET buy to close short position
+Step 2: If one leg fills but the other fails:
+  - Retry the unfilled leg up to 5 times with 200ms intervals
+  - If still unfilled, this is a CRITICAL situation: the position is now
+    directionally exposed. Place the order as an aggressive LIMIT order
+    at best bid/ask and wait up to 30 seconds.
+  - If still unfilled after 30 seconds, execute as MARKET with no price limit
+  - Alert operator immediately
+
+4.4 PROFIT TARGET EXIT
+
+- This strategy does NOT use fixed profit targets (it aims to hold as long as
+  funding is favorable)
+- However, if cumulative funding earned on the position exceeds 5% of position
+  notional AND the current funding rate has dropped below the entry threshold,
+  consider this a complete trade and exit
+
+4.5 TIME-BASED REVIEW
+
+- Every 24 hours, evaluate whether the position should remain open:
+  - Is the 24h average funding rate still above the minimum threshold?
+  - Is the basis still positive?
+  - Is the annualized yield (funding earned / notional / holding_days × 365)
+    still attractive (> 8% annualized)?
+- If the answer to any question is NO for 3 consecutive daily reviews, exit
+
+4.6 MAXIMUM HOLDING PERIOD
+
+- Maximum holding period: 30 days per position
+- After 30 days, close the position regardless of funding conditions
+- Wait 24 hours, then re-evaluate for fresh entry
+- This prevents excessive counterparty exposure to a single exchange and
+  forces periodic reconciliation
+
+4.7 PRE-FUNDING SETTLEMENT EXIT (TACTICAL)
+
+- When funding rate for the upcoming period is predicted to be extremely
+  negative (below −0.1%), consider temporarily closing the futures short
+  BEFORE the funding timestamp and reopening AFTER
+- This micro-optimization must account for the round-trip cost of closing
+  and reopening the futures leg (2 × taker fee = 0.08%)
+- Only execute if: abs(predicted negative funding) × notional > round-trip cost
+
+================================================================================
+SECTION 5: RISK MANAGEMENT RULES
+================================================================================
+
+5.1 POSITION SIZING & CAPITAL ALLOCATION
+
+- Maximum capital allocated to this strategy: 40% of total account equity
+  (higher than directional strategies because this is delta-neutral)
+- Maximum per-instrument allocation: 20% of total account equity
+- Capital split between wallets:
+  Spot wallet: 55% of allocated capital (to buy spot assets)
+  Futures wallet: 45% of allocated capital (margin for short positions)
+  The split accounts for the fact that futures positions require less margin
+  (leveraged) but need buffer for mark-to-market movements
+
+5.2 LEVERAGE ON FUTURES LEG
+
+- Maximum leverage on the futures short: 3x
+- Preferred leverage: 2x
+- Rationale: Even though the position is delta-neutral, the futures leg can
+  be liquidated if price rallies strongly AND the spot profit cannot offset
+  futures margin calls in real-time (because they are in different wallets)
+- Lower leverage provides larger buffer against liquidation of the short leg
+
+5.3 LIQUIDATION DISTANCE MONITORING
+
+- Calculate liquidation price of the futures short position continuously:
+  Liq Price = Entry Price × (1 + (Margin / Notional) × (1 − Maintenance Margin Rate))
+  (Simplified — use Binance's exact formula with tiered margin rates)
+- Monitor the distance between current price and liquidation price
+- WARNING threshold: price is within 15% of liquidation price
+  Action: Transfer additional USDT from spot to futures wallet
+- CRITICAL threshold: price is within 10% of liquidation price
+  Action: Partially close BOTH legs (25% of position) to free margin
+- EMERGENCY threshold: price is within 5% of liquidation price
+  Action: Close ENTIRE position immediately (both legs)
+
+5.4 CROSS-WALLET MARGIN MANAGEMENT
+
+- Maintain a reserve buffer of 10% of total allocated capital in the futures
+  wallet beyond what is needed for margin
+- When the futures wallet balance (excluding unrealized PnL) drops below 20%
+  of the total short position notional, trigger a margin top-up:
+  Sell a portion of spot holdings → transfer USDT to futures wallet
+- This creates a temporary delta imbalance that must be corrected within 1 hour
+  by reducing the futures short proportionally
+
+5.5 DRAWDOWN PROTECTION
+
+Daily Drawdown Limit: 1.5% of starting-of-day equity
+- This strategy should have very low drawdowns given its delta-neutral nature
+- If daily drawdown exceeds 1.5%, it indicates a structural problem (basis
+  collapse, liquidation risk, execution failure). HALT immediately.
+
+Weekly Drawdown Limit: 3%
+Monthly Drawdown Limit: 5%
+System-Wide: Same as Section 5 of STRAT-001 (15% total halt)
+
+5.6 EXPOSURE LIMITS
+
+- Maximum concurrent instruments for this strategy: 5
+- Maximum single-asset notional: 20% of total account equity
+- Maximum total strategy notional (sum of all instruments): 80% of allocated
+  capital (40% of total equity × 2 because each position has two legs)
+- Delta must remain within ±0.5% at all times
+
+5.7 CIRCUIT BREAKERS
+
+Basis Flash Inversion:
+- If basis inverts (negative) by more than 0.5% within 5 minutes,
+  close ALL positions for this strategy immediately (both legs)
+- Cool-down: 4 hours before re-entry
+
+Funding Rate Shock:
+- If predicted funding rate swings from positive to below −0.2% within a
+  single period, close all positions
+- Cool-down: 24 hours
+
+Liquidation Cascade Detection:
+- If forceOrder stream shows more than 50 liquidation events in 60 seconds
+  for a held instrument, prepare for emergency exit
+- If liquidation volume exceeds 10% of 24h trading volume in 5 minutes,
+  execute emergency exit of ALL positions
+
+Exchange Anomaly:
+- If spot price and futures mark price diverge by more than 2% for more than
+  60 seconds (outside of known volatility events), halt and alert
+
+Kill Switch:
+- Same as STRAT-001: manual and automated, completes within 10 seconds
+- Kill switch must close BOTH spot and futures legs
+
+================================================================================
+SECTION 6: POSITION SIZING RULES
+================================================================================
+
+6.1 BASE CALCULATION
+
+Spot_Position_Size = Allocated_Capital × Spot_Split / Spot_Price
+Futures_Position_Size = Spot_Position_Size (matched notional)
+Futures_Margin_Required = Futures_Position_Size × Futures_Price / Leverage
+
+Where:
+- Allocated_Capital = min(Account_Equity × 40%, per-instrument cap)
+- Spot_Split = 55%
+- Futures_Split = 45%
+
+Verify: Futures_Margin_Required < Futures_Wallet_Balance × 80% (20% buffer)
+
+6.2 INSTRUMENT SELECTION AND ALLOCATION
+
+When multiple instruments have qualifying funding rates:
+
+Step 1: Rank all qualifying instruments by predicted annualized yield:
+  Yield = Predicted_Funding_Rate × 3 × 365 × 100%
+
+Step 2: Allocate capital proportionally to yield, with caps:
+  Instrument 1 (highest yield): up to 20% of total equity
+  Instrument 2: up to 15%
+  Instrument 3: up to 10%
+  Instruments 4-5: up to 5% each
+
+Step 3: Round position sizes to exchange minimum lot sizes
+Step 4: Verify total allocation does not exceed strategy maximum (40%)
+
+6.3 REBALANCING
+
+- Rebalance allocations weekly (every Monday 00:00 UTC)
+- If a held instrument's funding rate drops below threshold but another
+  qualifying instrument has higher yield, rotate capital
+- Rotation must be delta-neutral at all times: close both legs of outgoing
+  instrument before opening both legs of incoming instrument
+- Maximum rotation per week: 2 instruments (to control transaction costs)
+
+================================================================================
+SECTION 7: FILTERS & DISQUALIFIERS
+================================================================================
+
+7.1 MINIMUM LIQUIDITY
+- Spot 24h volume must exceed $50 million
+- Futures 24h volume must exceed $200 million
+- If either drops below these thresholds while in a position, begin unwinding
+  over 24 hours (close 25% every 6 hours)
+
+7.2 SPREAD FILTER
+- Spot bid-ask spread must be < 0.05% of mid-price
+- Futures bid-ask spread must be < 0.03% of mid-price
+- If spread exceeds these during entry window, delay entry until compliant
+
+7.3 FUNDING RATE SUSTAINABILITY
+- Do NOT enter if the high funding rate is caused by a single 8-hour spike
+  (current rate > 3x the 7-day average with no sustained elevation)
+- Require at least 3 of the last 6 funding periods to be above the entry
+  threshold before committing capital
+
+7.4 MARKET REGIME FILTER
+- During extreme fear events (BTC down > 15% in 7 days), funding rates may
+  be artificially depressed and volatile. Pause new entries.
+- During extreme greed (BTC up > 30% in 7 days), funding rates are likely
+  elevated but the risk of a sharp reversal (basis collapse) increases.
+  Enter with 50% reduced size.
+
+7.5 FEE THRESHOLD
+- Minimum expected funding income over planned holding period must exceed
+  3x the total round-trip transaction costs (both legs)
+- If estimated holding period at current rate produces less than 3x fees,
+  the trade is not viable — skip it
+
+7.6 EXCHANGE COUNTERPARTY DIVERSIFICATION
+- No more than 60% of total funding arb capital should be on a single exchange
+- If implementing on multiple exchanges, ensure withdrawal paths are clear
+  and tested (this is an architectural note for future multi-exchange versions)
+
+7.7 CONSECUTIVE LOSS HANDLING
+- After 2 consecutive losing positions (net negative after funding and fees):
+  Reduce position size by 50% for next entry
+- After 4 consecutive losses: HALT strategy, manual review required
+  (4 losses in a delta-neutral strategy indicates a systemic issue)
+
+================================================================================
+SECTION 8: 24/7 OPERATION HANDLING
+================================================================================
+
+8.1 STATE PERSISTENCE
+
+Persist every 5 seconds:
+- All open positions: BOTH spot and futures legs with exact quantities, entry
+  prices, entry timestamps, accumulated funding income per position
+- Wallet balances: spot USDT, spot asset quantities, futures wallet balance,
+  futures position margin, futures unrealized PnL
+- Funding tracking: total funding earned per instrument, per day, per period
+- Predicted next funding rate and timestamp
+- Basis history: last 24 hours of basis values (1-minute resolution)
+- Delta calculation: current net delta exposure per instrument
+
+8.2 STARTUP RECONCILIATION
+
+Same protocol as STRAT-001 Section 8.2, with additional steps:
+- Reconcile BOTH spot and futures account states
+- Verify delta neutrality: for each instrument, spot holdings × spot price
+  must approximately equal futures short notional
+- Check if any funding payments were received during downtime:
+  Query GET /fapi/v1/income with incomeType=FUNDING_FEE for the downtime period
+- Update cumulative funding income tracking
+- If a spot holding exists without a matching futures short (or vice versa),
+  this is a CRITICAL orphan situation:
+  - If spot exists without futures short: immediately open matching futures short
+  - If futures short exists without spot: immediately buy matching spot
+  - Both corrections must happen within 60 seconds of detection
+
+8.3 FUNDING SETTLEMENT MONITORING
+
+- At each funding timestamp (00:00, 08:00, 16:00 UTC), the bot must:
+  1. Record the actual funding rate applied
+  2. Query /fapi/v1/income for the funding payment received/paid
+  3. Compare actual payment with expected payment (position × rate)
+  4. Log any discrepancy exceeding 0.1% of expected
+  5. Update cumulative performance tracking
+- Perform this check within 5 minutes of each funding timestamp
+- Set a timer for 10 minutes before each funding timestamp to verify
+  positions are correctly held (no accidental closures)
+
+8.4 WALLET REBALANCING AUTOMATION
+
+- Monitor spot and futures wallet balance ratios every 5 minutes
+- If futures wallet balance drops below required margin × 1.3 (30% buffer
+  eroding), initiate automated transfer:
+  - Sell a calculated amount of spot asset
+  - Transfer USDT to futures wallet via internal transfer
+  - Reduce futures short proportionally to maintain delta neutrality
+  - Log the rebalancing event with all details
+
+8.5 HEARTBEAT, MEMORY, LOG ROTATION
+
+Same specifications as STRAT-001 Section 8.3-8.5, with strategy ID STRAT-002.
+
+================================================================================
+SECTION 9: PAPER TRADING SPECIFICATIONS
+================================================================================
+
+9.1 FUNDING PAYMENT SIMULATION
+
+- At each funding timestamp, calculate and credit the simulated funding payment:
+  Payment = Futures_Position_Notional × Actual_Funding_Rate
+- If funding rate is positive, credit the paper account (short earns)
+- If funding rate is negative, debit the paper account (short pays)
+- Use the ACTUAL funding rate from Binance, not predicted (simulate reality)
+
+9.2 EXECUTION SIMULATION
+
+- Simulate both spot and futures fills independently
+- Spot fill: best ask + simulated slippage (walk order book depth)
+- Futures fill: best bid + simulated slippage
+- Simulate 200ms delay between legs (realistic execution gap)
+- Track basis captured vs intended for each entry/exit
+
+9.3 FEE STRUCTURE
+
+- Spot: Taker 0.10% per trade (or applicable tier)
+- Futures: Taker 0.04% per trade (or applicable tier)
+- Apply to all four legs (spot open, spot close, futures open, futures close)
+
+9.4 GO-LIVE CRITERIA
+
+Minimum 30-day paper trading period, with:
+- Net positive PnL after all simulated fees and funding
+- Annualized yield > 8% (after costs)
+- Maximum drawdown < 3%
+- No instances of delta exceeding ±1% for more than 5 minutes
+- Successful handling of at least 2 negative funding rate periods
+- Successful simulation of at least 1 entry and 1 exit
+- Uptime > 98%
+
+================================================================================
+SECTION 10: PERFORMANCE METRICS
+================================================================================
+
+10.1 STANDARD METRICS (same as STRAT-001 Section 10.1)
+
+10.2 STRATEGY-SPECIFIC METRICS
+
+- Cumulative Funding Income: total funding earned, broken down by instrument,
+  by day, by week, by month
+- Average Funding Rate Captured: weighted by position size and holding duration
+- Annualized Yield: (total funding income / average notional deployed) × 
+  (365 / holding days) × 100%
+- Basis Capture Efficiency: average actual entry basis vs theoretical basis
+  at signal time
+- Delta Neutrality Score: percentage of time delta was within ±0.5% target
+- Funding Rate Win/Loss: percentage of individual funding periods that were
+  net positive vs negative
+- Cost-to-Income Ratio: total transaction costs / total funding income
+  (target: < 30%)
+- Liquidation Distance Minimum: lowest observed distance between futures price
+  and liquidation price during any position
+- Wallet Rebalancing Count: number of cross-wallet transfers per month
+- Average Holding Duration Per Position: days
+- Yield Per Instrument Comparison: which instruments contributed most to returns
+
+10.3 PERFORMANCE BREAKDOWNS
+
+Same dimensions as STRAT-001 Section 10.3, plus:
+- By funding rate regime (low: 0-0.03%, medium: 0.03-0.1%, high: >0.1%)
+- By basis regime (narrow: <0.05%, normal: 0.05-0.2%, wide: >0.2%)
+- By market volatility regime (ATR percentile buckets)
+
+================================================================================
+SECTION 11: EDGE CASES & FAILURE MODES
+================================================================================
+
+11.1 ONE LEG FILLS, OTHER FAILS
+- CRITICAL scenario. If spot buy fills but futures short fails (or vice versa):
+  Immediate retry of failed leg: 5 attempts, 200ms apart
+  If still failing: attempt to close the filled leg at market
+  If BOTH legs are stuck (one filled, one failing, and the filled one cannot
+  close): this is an EMERGENCY. Alert operator immediately. The position is
+  now directionally exposed.
+  Maximum time to remain with one leg open: 60 seconds
+  Fallback: accept the directional exposure and place a tight stop loss
+  (1% from current price) on the open leg until the situation is resolved
+
+11.2 FUNDING RATE TURNS SHARPLY NEGATIVE DURING HOLDING
+- If predicted funding rate drops below −0.05%:
+  Evaluate cost of paying one negative funding period vs cost of closing
+  and reopening later
+  If negative_rate × notional < round_trip_cost: absorb the payment
+  If negative_rate × notional > round_trip_cost: close futures short before
+  settlement, reopen after settlement (tactical avoidance)
+  If rate stays negative for 3+ periods: full exit per Section 4.1
+
+11.3 SHARP PRICE RALLY THREATENING FUTURES LIQUIDATION
+- The spot position GAINS value during rallies, but those gains are in the
+  spot wallet and cannot directly offset futures margin calls
+- The bot must proactively transfer USDT to futures wallet during rallies:
+  Monitor: If price increases by 5%+ from short entry, initiate transfer
+  Sell spot proportionally, transfer to futures, or use available USDT
+- If Binance internal transfers are delayed or failing: reduce futures
+  position size immediately to lower margin requirements
+
+11.4 SPOT ASSET DELISTED OR HALTED
+- If a spot asset is halted for trading on Binance:
+  Close the futures leg immediately (it will be directionally exposed anyway)
+  Alert operator with full position details
+  Track the halted asset in state for eventual resolution
+
+11.5 BINANCE FEE TIER CHANGE
+- Query current fee tier on startup and every 24 hours
+- If fees increase, recalculate minimum viable funding rate threshold
+- Adjust entry threshold dynamically to maintain profitability
+
+11.6 CLOCK DRIFT CAUSING MISSED FUNDING SETTLEMENT
+- If the bot's clock drifts and it closes/reopens around a funding timestamp
+  incorrectly, it may miss a funding payment or pay an unwanted one
+- Synchronize with Binance server time every 60 seconds
+- Never execute position changes within 5 minutes of a funding timestamp
+  (00:00, 08:00, 16:00 UTC) unless it is a tactical funding avoidance trade
+
+================================================================================
+SECTION 12: DEPENDENCIES & INTEGRATION POINTS
+================================================================================
+
+12.1 UNIFIED WEBSOCKET MANAGER
+- Same integration as STRAT-001, strategy ID: STRAT-002
+- NOTE: This strategy requires BOTH spot and futures WebSocket endpoints
+- The WebSocket manager must support connections to both:
+  wss://stream.binance.com (spot)
+  wss://fstream.binance.com (futures)
+- Stream routing must distinguish between spot and futures data for the same
+  symbol
+
+12.2 CENTRALIZED RATE LIMIT MANAGER
+- This strategy's API budget: 150 weight per minute (normal operation)
+- Higher budget during entry/exit: 300 weight (2-minute burst for both legs)
+- Separate rate limit tracking for spot API and futures API (Binance tracks
+  them independently)
+- Order placement on both spot and futures APIs gets CRITICAL priority
+
+12.3 SHARED RISK MANAGER
+- Reports delta exposure per instrument (should be near zero)
+- Reports total notional deployed
+- Cross-strategy checks: if another strategy is LONG BTC in futures, and this
+  strategy has a short BTC futures leg, they partially offset — the risk
+  manager must account for this netting
+
+12.4 DATABASE, DASHBOARD, ALERTING
+- Same as STRAT-001 Section 12.4-12.6
+- Additional database fields: funding_income_per_period, basis_at_entry,
+  basis_at_exit, delta_at_each_checkpoint, wallet_rebalancing_events
+- Dashboard must display: real-time basis, predicted funding, accumulated
+  yield, liquidation distance, delta exposure per instrument
+
+================================================================================
+END OF DOCUMENT
+================================================================================

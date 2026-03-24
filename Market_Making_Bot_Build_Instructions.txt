@@ -1,0 +1,554 @@
+================================================================================
+MARKET MAKING
+ALGORITHMIC TRADING BOT — BUILD INSTRUCTIONS
+================================================================================
+Version: 1.0
+Classification: Proprietary — Quantitative Trading Desk
+Strategy ID: STRAT-006-MARKET-MAKING
+================================================================================
+
+TABLE OF CONTENTS
+1.  Strategy Overview
+2.  Required Data Streams
+3.  Entry Logic
+4.  Exit Logic
+5.  Risk Management Rules
+6.  Position Sizing Rules
+7.  Filters & Disqualifiers
+8.  24/7 Operation Handling
+9.  Paper Trading Specifications
+10. Performance Metrics
+11. Edge Cases & Failure Modes
+12. Dependencies & Integration Points
+
+================================================================================
+SECTION 1: STRATEGY OVERVIEW
+================================================================================
+
+1.1 WHAT THIS STRATEGY DOES
+
+Market making continuously places simultaneous buy (bid) and sell (ask) limit
+orders around the mid-price of a crypto asset, earning the bid-ask spread as
+profit. The strategy acts as a liquidity provider — when other traders hit
+the bid or lift the ask, the market maker captures the spread. The core
+challenge is managing inventory risk (accumulating too much of one side) while
+maintaining competitive quotes.
+
+1.2 MARKET CONDITIONS TARGETED
+
+- High-volume, moderately volatile markets with consistent two-way flow
+- LESS liquid pairs where the spread is wide enough to generate meaningful
+  profit after fees (major pairs like BTC/USDT have spreads too tight for
+  retail market makers — professional firms with co-located servers dominate)
+- Mid-tier altcoin futures pairs with $30-200M daily volume
+
+1.3 THEORETICAL EDGE
+
+- The Avellaneda-Stoikov model provides the mathematical foundation for
+  optimal quote placement and inventory management
+- Professional market makers target 10-30% annually with Sharpe > 2.0
+- Retail market making via Hummingbot on mid-tier tokens can generate 5-50%
+  annually, but with significant inventory risk during directional moves
+- The edge comes from providing liquidity (a service) and being compensated
+  via the spread — it is a TIME-based edge, not a directional one
+
+1.4 TARGET INSTRUMENTS
+
+DO NOT market-make on BTC/USDT or ETH/USDT perpetuals — spreads are too
+tight and professional firms will outcompete.
+
+Target: Mid-tier perpetual futures with characteristics:
+- 24h volume: $30M - $200M (enough liquidity for fills, not enough for
+  professional firms to fully dominate)
+- Average spread: > 0.03% (must exceed 2× maker fee to be viable)
+- Examples: DOGE/USDT, DOT/USDT, NEAR/USDT, FTM/USDT, ATOM/USDT, APE/USDT,
+  SAND/USDT, MANA/USDT, and similar mid-cap tokens
+
+Maximum concurrent instruments: 3
+Selection criteria: widest profitable spread with adequate volume
+
+1.5 MATHEMATICAL FOUNDATION — AVELLANEDA-STOIKOV MODEL
+
+The model provides the optimal reservation (fair) price and optimal spread:
+
+Reservation Price: r(s, q, t) = s − q × γ × σ² × (T − t)
+
+Where:
+- s = current mid-price
+- q = current inventory (positive if long, negative if short)
+- γ = risk aversion parameter (higher = more aggressive inventory reduction)
+- σ² = variance of price (volatility squared)
+- T = end of trading session (in crypto, use rolling 8-hour windows)
+- t = current time
+
+Optimal Spread: δ = γ × σ² × (T − t) + (2/γ) × ln(1 + γ/κ)
+
+Where:
+- κ = order book depth parameter (higher = deeper book = wider spread needed)
+
+The reservation price shifts quotes to manage inventory:
+- If holding excess LONG inventory (q > 0): reservation price drops below
+  mid-price, making the ask more competitive (encouraging sells to reduce
+  inventory) and the bid less competitive
+- If holding excess SHORT inventory (q < 0): opposite shift
+
+================================================================================
+SECTION 2: REQUIRED DATA STREAMS
+================================================================================
+
+2.1 WEBSOCKET STREAMS (per instrument, max 3)
+
+- <symbol>@depth20@100ms — CRITICAL: Top 20 order book levels, updated every
+  100ms. This is the primary data source for quote placement.
+- <symbol>@bookTicker   — Best bid/ask, updated on every change
+- <symbol>@aggTrade     — Every aggregated trade for volume analysis
+- <symbol>@kline_1m     — 1-minute candles for volatility calculation
+- <symbol>@kline_5m     — Short-term trend detection
+- <symbol>@kline_1h     — Medium-term trend filter
+- <symbol>@markPrice@1s — Mark price, funding rate monitoring
+- <symbol>@forceOrder   — Liquidation detection
+
+Total per instrument: 8
+Maximum total: 24
+
+2.2 REST API ENDPOINTS
+
+Order Management (HIGH FREQUENCY):
+- POST /fapi/v1/order — Place quote orders. Weight: 1.
+  Expected frequency: 20-100 orders per minute across all instruments
+- DELETE /fapi/v1/order — Cancel and replace quotes. Weight: 1.
+  Expected frequency: same as placement (quotes are constantly updated)
+- GET /fapi/v1/openOrders — Verify outstanding quotes. Weight: 1 per symbol.
+  Called every 10 seconds.
+
+RATE LIMIT WARNING: Market making is the most API-intensive strategy. The
+10 orders/second limit and 1200 weight/minute limit are BINDING constraints.
+All quote management must be optimized to minimize API calls:
+- Cancel-and-replace instead of separate cancel + new order where possible
+- Batch operations where possible
+- Only update quotes when the model indicates a meaningful change in optimal
+  price (threshold: 0.01% or more shift in reservation price)
+
+Account:
+- GET /fapi/v2/account — Every 30 seconds. Weight: 5.
+
+2.3 USER DATA STREAM
+Same as previous strategies — ORDER_TRADE_UPDATE is critical for detecting
+fills and triggering quote updates.
+
+================================================================================
+SECTION 3: ENTRY LOGIC
+================================================================================
+
+3.1 MODEL PARAMETER CALIBRATION (RUN ON STARTUP AND EVERY HOUR)
+
+Step 1: Volatility Estimation (σ)
+- Calculate realized volatility from 1-minute candle returns over the last
+  60 minutes: σ = stdev(ln(Close_i / Close_(i-1))) × sqrt(60)
+- This gives hourly volatility
+- Annualize: σ_annual = σ_hourly × sqrt(8760)
+- Update every 15 minutes using a 60-minute rolling window
+
+Step 2: Order Book Depth Parameter (κ)
+- Measure the order book intensity: average depth (in USDT) at the best 5
+  levels on both sides over the last 30 minutes
+- κ = Average_Depth / (Mid_Price × 0.001)
+  This normalizes depth relative to a 0.1% price move
+- Higher κ = deeper book = market maker can use tighter spread
+- Lower κ = thinner book = wider spread needed
+
+Step 3: Risk Aversion Parameter (γ)
+- Base γ = 0.1 (moderate risk aversion)
+- Adjust based on current inventory:
+  If |inventory| > 50% of max allowed: γ = 0.3 (aggressive inventory reduction)
+  If |inventory| > 75% of max allowed: γ = 0.5 (very aggressive)
+  If |inventory| < 25% of max: γ = 0.05 (relaxed, accumulate spread income)
+
+Step 4: Session Time Parameter (T − t)
+- Use rolling 8-hour windows aligned with funding timestamps
+- T − t = time remaining until next funding timestamp (in fractional hours)
+- As T − t approaches 0, the model naturally widens spreads (less time to
+  recover from adverse fills)
+
+3.2 QUOTE CALCULATION
+
+Every time the model parameters or market data update meaningfully (at least
+every 5 seconds, more frequently during active markets):
+
+Step 1: Calculate Reservation Price
+- r = mid_price − inventory × γ × σ² × (T − t)
+- mid_price = (best_bid + best_ask) / 2 from bookTicker
+
+Step 2: Calculate Optimal Half-Spread
+- half_spread = (γ × σ² × (T − t) + (2/γ) × ln(1 + γ/κ)) / 2
+
+Step 3: Determine Quote Prices
+- bid_quote = r − half_spread
+- ask_quote = r + half_spread
+
+Step 4: Round to Tick Size
+- Round bid_quote DOWN to the nearest tick (price precision for the instrument)
+- Round ask_quote UP to the nearest tick
+- This ensures the quotes are valid prices on Binance
+
+Step 5: Minimum Spread Enforcement
+- The spread (ask_quote − bid_quote) must be at least:
+  Minimum_Spread = 2 × maker_fee + 0.005% (safety margin)
+  = 2 × 0.02% + 0.005% = 0.045%
+- If calculated spread is tighter, widen symmetrically until minimum is met
+
+Step 6: Maximum Spread Enforcement
+- Maximum_Spread = 5 × current market spread (avoid being too far from market)
+- If calculated spread exceeds this, narrow to Maximum_Spread
+
+3.3 QUOTE PLACEMENT AND MANAGEMENT
+
+Step 7: Place/Update Quotes
+- If no quotes are currently active: place bid and ask limit orders
+- If quotes exist: check if new calculated prices differ from current orders
+  by more than 0.01% of price
+  If YES: cancel old orders, place new ones (cancel-replace cycle)
+  If NO: leave existing orders (avoid unnecessary API consumption)
+
+Step 8: Quote Sizing
+- Each quote (bid and ask) has a quantity determined by Section 6
+- Bid size and ask size may differ based on inventory:
+  If LONG inventory: ask size = 1.5× base size, bid size = 0.5× base size
+  (encourage sells, discourage buys — inventory reduction)
+  If SHORT inventory: opposite
+  If neutral: equal sizes
+
+Step 9: Quote Layering (Optional, Advanced)
+- Place quotes at multiple levels, not just one:
+  Level 1 (tight): 40% of size at calculated optimal prices
+  Level 2 (wider): 35% of size at 1.5× half_spread from reservation price
+  Level 3 (widest): 25% of size at 2× half_spread from reservation price
+- This provides depth and captures fills even during wider price swings
+- But consumes more API rate limit budget — only enable if budget allows
+
+3.4 FILL HANDLING
+
+When a BID fills (someone sold to us — we accumulated inventory):
+- Update inventory count immediately
+- Recalculate reservation price (it will shift downward for longs)
+- Update or replace the ask quote (it becomes more competitive to offload)
+- Log: fill price, mid-price at fill time, fill size, inventory delta
+
+When an ASK fills (someone bought from us — we reduced inventory):
+- Update inventory count immediately
+- Recalculate reservation price
+- Update or replace the bid quote
+- Log: fill price, mid-price at fill time, spread captured, inventory delta
+
+Completed round-trip (buy fill matched with subsequent sell):
+- Calculate gross profit: ask_fill − bid_fill
+- Calculate net profit: gross − maker_fee_bid − maker_fee_ask
+- Credit to strategy PnL
+
+================================================================================
+SECTION 4: EXIT LOGIC
+================================================================================
+
+4.1 QUOTE WITHDRAWAL (TEMPORARY EXIT)
+
+The strategy exits the market (cancels all quotes) under these conditions:
+- Volatility spike: if 1-minute realized vol exceeds 3× the hourly average,
+  withdraw all quotes for 5 minutes (spread becomes too uncertain)
+- Large order detected: if aggTrade shows a single trade > 5× average trade
+  size, withdraw for 30 seconds (potential informed trader)
+- Spread collapse: if the market spread narrows below the minimum viable
+  spread (Section 3.2 Step 5), withdraw until spread widens
+
+4.2 INVENTORY LIQUIDATION
+
+If inventory accumulates beyond the maximum threshold (Section 5.3):
+- Phase 1: Skew quotes aggressively (γ increase, Section 3.1 Step 3)
+- Phase 2: If inventory still excessive after 30 minutes, place a MARKET
+  order to reduce inventory by 50%
+- Phase 3: If inventory exceeds emergency threshold, close ALL inventory
+  at market and pause strategy for 1 hour
+
+4.3 END OF SESSION
+
+- Since crypto markets are 24/7, there is no session end
+- Instead, at each 8-hour funding timestamp, perform a soft reset:
+  Cancel all quotes
+  If holding any inventory, evaluate: is the carry (funding rate) favorable?
+  If yes: hold through funding payment, then resume quoting
+  If no: reduce inventory to zero, then resume quoting
+  This prevents paying negative funding on accumulated inventory
+
+4.4 STRATEGY HALT
+
+- If daily PnL is negative (market making should be consistently profitable
+  in small amounts), halt and investigate
+- A negative day suggests adverse selection (informed traders picking off
+  stale quotes) or a regime change (trending market chewing through one side)
+
+================================================================================
+SECTION 5: RISK MANAGEMENT RULES
+================================================================================
+
+5.1 POSITION SIZING & CAPITAL ALLOCATION
+
+- Maximum capital for this strategy: 15% of total account equity
+- Maximum per instrument: 7% of total equity
+- The capital must be viewed as MARGIN for inventory, not as deployment target
+  (the goal is to earn spread, not deploy capital directionally)
+
+5.2 LEVERAGE
+
+- Maximum leverage: 3x
+- Preferred: 2x
+- Leverage is needed because quoted sizes should be meaningful relative to
+  the order book, but actual capital at risk is much less than notional
+
+5.3 INVENTORY LIMITS
+
+- Maximum LONG inventory: 3% of total account equity (notional)
+- Maximum SHORT inventory: 3% of total account equity (notional)
+- If inventory reaches 2%: increase γ to aggressive (0.3)
+- If inventory reaches 3%: stop placing new orders on the accumulating side
+- If inventory reaches 4% (post-fill overshoot): market order to reduce to 2%
+
+5.4 DRAWDOWN PROTECTION
+
+Daily drawdown limit: 1.0% (very tight — market making should not have
+large drawdowns)
+Weekly: 2%
+Monthly: 4%
+System-wide: 15%
+
+5.5 ADVERSE SELECTION DETECTION
+
+- Track the percentage of fills that are immediately profitable vs unprofitable:
+  After each fill, measure mid-price 1 second later
+  If mid-price moved AGAINST the fill direction > 60% of the time, the
+  strategy is being adversely selected (informed traders are picking it off)
+- If adverse selection rate exceeds 60% over 100 fills: halt and widen spreads
+  by 50% before resuming
+- If adverse selection rate exceeds 70%: halt the strategy on that instrument
+
+5.6 CIRCUIT BREAKERS
+
+Same structure as previous strategies, plus:
+- Quote staleness: if both bid and ask have been live for > 60 seconds without
+  an update, check if the system is healthy (potential bug or frozen state)
+- Inventory blowout: if inventory swings from max LONG to max SHORT (or vice
+  versa) within 1 hour, halt — this suggests the market is whipsawing through
+  the quotes too aggressively
+
+Kill Switch:
+- Cancel all orders on all instruments
+- Liquidate all inventory
+- Must complete within 10 seconds
+
+================================================================================
+SECTION 6: POSITION SIZING RULES
+================================================================================
+
+6.1 QUOTE SIZE CALCULATION
+
+Base_Quote_Size = (Allocated_Capital × 0.2) / Current_Price
+
+This means each quote represents about 20% of allocated capital — with bids
+and asks alternating, the maximum inventory if ALL bids fill is approximately
+the allocated capital.
+
+6.2 INVENTORY-ADJUSTED SIZING (from Section 3.3 Step 8)
+
+When LONG inventory:
+  Bid_Size = Base_Quote_Size × (1 − inventory_pct × 2)  [min 0.1× base]
+  Ask_Size = Base_Quote_Size × (1 + inventory_pct × 2)  [max 2× base]
+
+When SHORT inventory: mirror the above
+
+inventory_pct = abs(current_inventory_notional) / max_inventory_notional
+
+6.3 MINIMUM ORDER SIZE
+
+- All quote orders must meet Binance minimum notional
+- If the calculated size falls below minimum: increase to minimum
+- If increasing to minimum would breach inventory limits: skip the order
+
+================================================================================
+SECTION 7: FILTERS & DISQUALIFIERS
+================================================================================
+
+7.1 TREND FILTER
+- If 1h EMA(20) is trending strongly (> 0.1% per hour slope), widen spreads
+  by 25% (trending markets cause systematic adverse selection on one side)
+- If daily ADX > 30: halt market making on that instrument
+
+7.2 SPREAD VIABILITY
+- If the natural market spread (best ask − best bid) / mid_price is below
+  0.03%: the instrument is too tightly traded for retail market making
+  Skip this instrument
+
+7.3 VOLUME FILTER
+- 24h volume must be between $30M and $200M
+- Below $30M: fills will be too infrequent
+- Above $200M: professional firms dominate, spreads too tight
+
+7.4 LIQUIDATION CASCADE FILTER
+- If forceOrder stream shows elevated liquidation activity (> 10 events per
+  minute): withdraw all quotes for 10 minutes
+
+7.5 FEE THRESHOLD
+- Minimum spread after model calculation must exceed 2× round-trip maker fees
+  Minimum: 2 × (0.02% + 0.02%) = 0.08%
+- If model suggests tighter spread: do NOT go below 0.08%
+
+7.6 NEWS/EVENT FILTER
+- During high-impact events: withdraw all quotes 1 hour before, resume
+  30 minutes after
+- Spreads widen dramatically during events; the risk of adverse selection
+  is extremely high
+
+================================================================================
+SECTION 8: 24/7 OPERATION HANDLING
+================================================================================
+
+8.1 STATE PERSISTENCE (Every 3 seconds — faster than other strategies)
+
+- All open quotes: order_id, side, price, quantity, placement_timestamp
+- Current inventory per instrument: quantity, average_cost, direction
+- Model parameters: current σ, κ, γ, reservation_price
+- Fill history: last 1000 fills with timestamps, prices, mid-price at fill
+- Adverse selection tracking: recent fill quality scores
+
+8.2 STARTUP RECONCILIATION
+
+Same as previous strategies plus:
+- On restart, immediately cancel ALL existing orders for this strategy's
+  instruments (stale quotes are dangerous)
+- Recalibrate model parameters from scratch (fetch 60 minutes of 1m klines)
+- Verify inventory from account state
+- Place fresh quotes based on current model output
+- Resume time from cancel-to-fresh-quotes: target < 30 seconds
+
+8.3 QUOTE HEALTH MONITORING
+
+- Every 10 seconds, verify:
+  Both bid and ask quotes are active on each instrument
+  Quotes are within 0.5% of mid-price (not orphaned far from market)
+  Inventory is within limits
+  Model parameters are fresh (calculated within last 60 seconds)
+
+8.4 HEARTBEAT, MEMORY, LOGS
+Same as previous strategies with strategy ID STRAT-006.
+
+Additional: Quote update log (every quote change) — high volume, rotate daily.
+
+================================================================================
+SECTION 9: PAPER TRADING SPECIFICATIONS
+================================================================================
+
+9.1 FILL SIMULATION
+
+- LIMIT bid fills: execute when aggTrade price ≤ bid_price AND volume > 0
+- LIMIT ask fills: execute when aggTrade price ≥ ask_price AND volume > 0
+- Simulate queue position: if our quote is at the same price as existing
+  depth, only fill proportional to our size vs total depth at that level
+- This is CRITICAL for market making simulation — assuming immediate fills
+  at limit price dramatically overestimates profitability
+
+9.2 ADVERSE SELECTION SIMULATION
+
+- After each simulated fill, track 1-second forward price movement
+- This determines whether the simulated fills were truly profitable or
+  whether they would have been adversely selected in live trading
+
+9.3 GO-LIVE CRITERIA (30-day minimum)
+
+- Net positive PnL after simulated fees
+- Profit per day is positive on > 70% of days
+- Adverse selection rate < 55%
+- Maximum inventory drawdown < 2%
+- Sharpe ratio > 1.5 (market making should be high-Sharpe)
+- Average spread captured > 2× maker fees
+
+================================================================================
+SECTION 10: PERFORMANCE METRICS
+================================================================================
+
+10.1 STANDARD METRICS — Same as STRAT-001
+
+10.2 STRATEGY-SPECIFIC METRICS
+
+- Spread Captured Per Fill: average (fill_price − mid_price_at_fill)
+- Inventory Turnover: how many times the inventory cycles per day
+- Quote Uptime: percentage of time both bid and ask are active
+- Fill Rate: percentage of quotes that result in fills
+- Adverse Selection Rate: percentage of fills where mid-price moves against
+  within 1 second
+- Realized Spread vs Quoted Spread: how much of the quoted spread is actually
+  captured after adverse selection
+- Inventory PnL vs Spread PnL: decompose total PnL into spread income
+  (good) and inventory mark-to-market (risky)
+- Order-to-Fill Ratio: number of orders placed per fill (efficiency metric)
+- API Efficiency: rate limit budget consumed per dollar of profit
+
+================================================================================
+SECTION 11: EDGE CASES & FAILURE MODES
+================================================================================
+
+11.1 QUOTE STUFFING / WASH TRADING ON THE INSTRUMENT
+- If detected (unusual order/cancel patterns in depth stream), widen spreads
+  and reduce quote sizes
+
+11.2 SUDDEN LIQUIDITY WITHDRAWAL
+- If order book depth at top 5 levels drops below 50% of normal within 5
+  seconds, withdraw all quotes immediately (potential flash crash setup)
+
+11.3 BOTH QUOTES FILL IN RAPID SUCCESSION (INVENTORY SWING)
+- Bid fills followed immediately by ask fill (or vice versa) = profitable
+  double-fill, ideal scenario
+- Bid fills followed by ANOTHER bid fill before ask fills = rapid inventory
+  accumulation, potentially problematic
+- If 3+ fills on the same side occur within 10 seconds without any fills
+  on the opposite side: withdraw the accumulating side's quote, keep the
+  reducing side's quote active
+
+11.4 MAKER FEE CHANGE OR LOSS OF MAKER STATUS
+- If account loses maker fee tier (due to volume changes), recalculate
+  minimum viable spread
+- If maker fee increases by > 50%: halt and re-evaluate instrument viability
+
+11.5 INSTRUMENT DELISTING ANNOUNCEMENT
+- If an instrument is announced for delisting: immediately close all
+  inventory and cease quoting on that instrument
+- Liquidity will evaporate rapidly after delisting announcements
+
+================================================================================
+SECTION 12: DEPENDENCIES & INTEGRATION POINTS
+================================================================================
+
+12.1 UNIFIED WEBSOCKET MANAGER
+Strategy ID: STRAT-006
+HIGHEST LATENCY SENSITIVITY of all strategies. Requires:
+- Priority message delivery for bookTicker and depth streams
+- If WebSocket latency exceeds 500ms, this strategy should be notified
+  immediately to withdraw quotes (stale quotes are toxic)
+
+12.2 CENTRALIZED RATE LIMIT MANAGER
+- HIGHEST API CONSUMPTION of all strategies: budget 400 weight/minute
+- Order priority: NORMAL (quote updates are frequent but not urgent like
+  stop losses)
+- Must implement intelligent quote update batching: if the model suggests
+  updating both bid and ask, do so in a single cycle, not two separate ones
+
+12.3 SHARED RISK MANAGER
+- Reports: current inventory, quote spread, fill rate, adverse selection rate
+- Cross-strategy: if STRAT-001 or STRAT-004 opens a position in the same
+  instrument, the market making bot should acknowledge the directional
+  exposure and skew quotes to not add to it
+
+12.4 DATABASE, DASHBOARD, ALERTING
+Same structure as previous strategies.
+Dashboard must display: real-time quote positions on the order book,
+inventory gauge, spread captured heatmap, adverse selection indicator.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

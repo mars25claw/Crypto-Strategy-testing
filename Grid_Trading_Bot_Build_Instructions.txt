@@ -1,0 +1,569 @@
+================================================================================
+GRID TRADING
+ALGORITHMIC TRADING BOT — BUILD INSTRUCTIONS
+================================================================================
+Version: 1.0
+Classification: Proprietary — Quantitative Trading Desk
+Strategy ID: STRAT-005-GRID
+================================================================================
+
+TABLE OF CONTENTS
+1.  Strategy Overview
+2.  Required Data Streams
+3.  Entry Logic
+4.  Exit Logic
+5.  Risk Management Rules
+6.  Position Sizing Rules
+7.  Filters & Disqualifiers
+8.  24/7 Operation Handling
+9.  Paper Trading Specifications
+10. Performance Metrics
+11. Edge Cases & Failure Modes
+12. Dependencies & Integration Points
+
+================================================================================
+SECTION 1: STRATEGY OVERVIEW
+================================================================================
+
+1.1 WHAT THIS STRATEGY DOES
+
+Grid trading places a mesh of buy and sell limit orders at fixed price
+intervals within a defined price range. As price oscillates, the bot buys
+at each lower grid level and sells at each upper level, capturing the grid
+spacing as profit from each completed cycle. No directional prediction is
+required — profit comes from volatility itself.
+
+1.2 MARKET CONDITIONS TARGETED
+
+- Sideways, range-bound markets with oscillating price action
+- Periods of moderate volatility where price swings enough to cross grid levels
+  frequently but does not break out of the range
+- NOT suitable for strongly trending markets (the grid systematically sells
+  winners and buys losers during trends)
+
+1.3 THEORETICAL EDGE
+
+- Exploits crypto's high intraday volatility within ranges
+- Modified dynamic grid strategies achieved 32.8% annualized during sideways
+  BTC periods in backtesting
+- Geometric grids (equal percentage spacing) outperform arithmetic grids
+  across different price regimes
+- The edge diminishes to near-zero under random walk assumptions (academic
+  finding) — so regime detection and dynamic parameter adjustment are
+  CRITICAL for this strategy
+
+1.4 TARGET INSTRUMENTS
+
+Primary: BTC/USDT, ETH/USDT (perpetual futures or spot)
+Secondary: SOL/USDT, BNB/USDT
+Maximum instruments: 4 simultaneously
+Selection: Highest intraday range-to-trend ratio (most oscillation, least drift)
+
+1.5 GRID TYPES
+
+Geometric Grid (DEFAULT): Grid levels are spaced by equal percentage intervals
+  Level_n = Level_(n-1) × (1 + grid_percentage)
+  Advantage: adapts naturally to different price levels
+
+Arithmetic Grid (ALTERNATE): Grid levels are spaced by equal dollar intervals
+  Level_n = Level_(n-1) + grid_step_dollars
+  Use only when explicitly configured by operator
+
+================================================================================
+SECTION 2: REQUIRED DATA STREAMS
+================================================================================
+
+2.1 WEBSOCKET STREAMS (per instrument, max 4)
+
+- <symbol>@kline_1m    — Candle monitoring, range detection
+- <symbol>@kline_15m   — Mid-range trend detection
+- <symbol>@kline_4h    — Range boundary identification
+- <symbol>@kline_1d    — Long-term trend filter
+- <symbol>@bookTicker  — Real-time best bid/ask for order placement
+- <symbol>@depth20@100ms — Order book depth for fill probability
+- <symbol>@markPrice@1s — Mark price, PnL tracking
+- <symbol>@aggTrade    — Volume analysis, breakout detection
+
+Total per instrument: 8
+Maximum total: 32
+
+2.2 REST API ENDPOINTS
+
+Same structure as previous strategies with:
+- GET /fapi/v1/openOrders — CRITICAL for grid trading: must track all 
+  outstanding limit orders. Weight: 1 per symbol. Called every 15 seconds.
+- POST /fapi/v1/batchOrders — Batch order placement (up to 5 orders).
+  Weight: 5. Used for initial grid setup and grid resets.
+- DELETE /fapi/v1/allOpenOrders — Cancel all open orders for a symbol.
+  Weight: 1. Used for grid resets and emergency stops.
+
+2.3 USER DATA STREAM
+Same as STRAT-001 — ORDER_TRADE_UPDATE events are the PRIMARY trigger for
+grid order management (fill detection drives the next order placement)
+
+================================================================================
+SECTION 3: ENTRY LOGIC
+================================================================================
+
+3.1 RANGE IDENTIFICATION
+
+Before placing any grid orders, identify the current price range:
+
+Step 1: ATR-Based Range Calculation
+- Calculate ATR(14) on daily candles
+- Upper range boundary = Current_Price + (2.0 × Daily_ATR)
+- Lower range boundary = Current_Price − (2.0 × Daily_ATR)
+- This creates a range approximately ±2 ATR from current price
+
+Step 2: Support/Resistance Validation
+- Identify the highest high and lowest low of the last 30 daily candles
+- Upper boundary = min(ATR_Upper, 30-day High × 1.02)
+- Lower boundary = max(ATR_Lower, 30-day Low × 0.98)
+- The range should encompass recent price action with small buffers
+
+Step 3: Range Viability Check
+- Range width (as % of mid-price) must be between 5% and 25%
+  Too narrow (< 5%): insufficient room for grid levels; fees will eat profits
+  Too wide (> 25%): capital spread too thin; individual fills too small
+- If range is outside 5-25%, either adjust ATR multiplier or skip the instrument
+
+3.2 GRID PARAMETER CALCULATION
+
+Step 4: Number of Grid Levels
+- Minimum levels: 10
+- Maximum levels: 50
+- Default: 20 levels
+- Number is configurable per instrument
+
+Step 5: Grid Spacing (Geometric)
+- Grid_Percentage = ((Upper_Boundary / Lower_Boundary)^(1/Num_Levels) − 1) × 100
+- Each level is separated by this percentage
+- Grid levels from bottom to top:
+  Level_0 = Lower_Boundary
+  Level_1 = Level_0 × (1 + Grid_Percentage/100)
+  Level_2 = Level_1 × (1 + Grid_Percentage/100)
+  ... and so on to Level_N = Upper_Boundary
+
+Step 6: Verify Grid Spacing vs Fees
+- Each grid cycle (buy at Level_n, sell at Level_(n+1)) profits:
+  Gross Profit Per Cycle = Grid_Percentage
+- Round-trip fee = Maker fee (0.02%) × 2 = 0.04% (if using limit orders)
+  OR Taker fee (0.04%) × 2 = 0.08% (if using market orders)
+- NET Profit Per Cycle = Grid_Percentage − Round_Trip_Fee
+- REQUIREMENT: Net Profit Per Cycle > 3 × Round_Trip_Fee
+  This means Grid_Percentage > 4 × Round_Trip_Fee (0.16% minimum for maker)
+- If Grid_Percentage < 0.16%, reduce the number of levels (wider spacing)
+
+3.3 GRID DEPLOYMENT
+
+Step 7: Determine Current Position Relative to Grid
+- Identify which grid level is closest to the current price
+- All levels BELOW current price get BUY LIMIT orders
+- All levels ABOVE current price get SELL LIMIT orders (if holding inventory)
+  or remain empty until buys fill
+
+Step 8: Order Placement
+- Place all buy limit orders at their respective grid levels
+  Order type: LIMIT, postOnly: true (ensure maker fee)
+  Quantity per order: Total_Capital / Num_Levels / Level_Price
+  All orders for ONE side should be placed in a batch if possible
+  (POST /fapi/v1/batchOrders, 5 orders per batch)
+- Do NOT place sell orders until the corresponding buy orders fill
+  (This is a "buy-grid" approach — sell orders are triggered by fills)
+
+Step 9: Initial Inventory Decision
+- NEUTRAL start: Enter with no position, only buy orders placed below
+  (Simplest and safest — profits come purely from grid cycling)
+- LONG-BIASED start: Buy half the grid levels immediately at market price
+  to have sell orders active from the start
+  (Faster income generation but exposes to downside)
+- Default: NEUTRAL start
+
+3.4 FILL-TRIGGERED ORDER PLACEMENT
+
+This is the CORE mechanism of grid trading:
+
+When a BUY order fills at Level_N:
+- Immediately place a SELL LIMIT order at Level_(N+1)
+  Quantity: same as the fill quantity
+  Order type: LIMIT, postOnly: true
+- Log the fill: timestamp, level, price, quantity
+
+When a SELL order fills at Level_N:
+- Immediately place a BUY LIMIT order at Level_(N−1)
+  Quantity: same as the fill quantity
+  Order type: LIMIT, postOnly: true
+- Log the fill and calculate cycle profit:
+  Cycle_Profit = (Sell_Price − Buy_Price) × Quantity − Fees
+- Credit cycle profit to strategy PnL
+
+This creates a self-sustaining grid: fills trigger new orders in an
+endless loop as long as price oscillates within the range.
+
+Latency requirement: New order must be placed within 500ms of fill confirmation
+via USER DATA STREAM. Delay allows price to move away from the opportunity.
+
+================================================================================
+SECTION 4: EXIT LOGIC
+================================================================================
+
+4.1 RANGE BREAKOUT EXIT — UPSIDE
+
+- If price breaks ABOVE the upper grid boundary AND stays above for 2
+  consecutive 4h candle closes:
+  Step 1: Cancel all remaining buy limit orders
+  Step 2: All open sell orders will eventually fill as price moves up
+  Step 3: After all sell orders fill (or after 4 hours, whichever first),
+  the strategy has zero inventory and zero open orders
+  Step 4: Recalculate a NEW grid range centered on the new price level
+  Step 5: Redeploy the grid
+
+4.2 RANGE BREAKOUT EXIT — DOWNSIDE
+
+- If price breaks BELOW the lower grid boundary AND stays below for 2
+  consecutive 4h candle closes:
+  Step 1: Cancel all remaining sell limit orders (if any)
+  Step 2: The bot now holds inventory bought at various grid levels that
+  are ALL above current price (the worst-case scenario for grid trading)
+  Step 3: Decision tree:
+    Option A (DEFAULT): Hold inventory, widen the grid downward by adding
+    new buy levels below current price. Accept the unrealized loss and wait
+    for price to recover. Set a HARD STOP at 1.5 × ATR below the lower
+    grid boundary for total position liquidation.
+    Option B (AGGRESSIVE): Close all inventory at market, accept the loss,
+    and redeploy grid at new range. Use this if daily trend is confirmed
+    bearish (EMA 20 < EMA 50 on daily).
+
+4.3 GRID RESET
+
+- The entire grid is reset (all orders cancelled, inventory evaluated) when:
+  a) Range boundaries are recalculated (daily at 00:00 UTC)
+  b) A circuit breaker triggers
+  c) Manual operator command
+  d) The strategy's drawdown exceeds daily limit
+
+- Reset procedure:
+  1. Cancel ALL open orders for this strategy
+  2. Calculate current inventory value and unrealized PnL
+  3. Decide whether to hold or liquidate inventory based on new range parameters
+  4. Deploy new grid with updated parameters
+
+4.4 PROFIT EXTRACTION
+
+- When cumulative realized grid profits reach 5% of allocated capital:
+  Extract the profit (reduce deployed capital to original amount)
+  This prevents the strategy from re-risking accumulated profits
+  Extracted profits are available for other strategies or withdrawal
+
+4.5 TIME-BASED GRID REFRESH
+
+- Every 24 hours at 00:00 UTC, recalculate range boundaries
+- If new boundaries differ from current by > 5%: reset and redeploy grid
+- If new boundaries are within 5%: no change (avoid unnecessary order churn)
+
+================================================================================
+SECTION 5: RISK MANAGEMENT RULES
+================================================================================
+
+5.1 POSITION SIZING & CAPITAL ALLOCATION
+
+- Maximum capital for this strategy: 20% of total account equity
+- Capital per instrument: maximum 10% of total equity (or 20%/active instruments)
+- Capital per grid level: Total_Allocated / Number_of_Levels
+  (Equal allocation across levels for geometric grid)
+
+5.2 MAXIMUM INVENTORY EXPOSURE
+
+- Maximum inventory held at any time: 60% of levels filled (buying at lower
+  levels without corresponding sells)
+- If more than 60% of grid buy levels have filled without corresponding sells,
+  HALT new buy orders (price is moving consistently downward — trend, not range)
+- Resume buy orders only if price reverses and at least 2 sell levels fill
+
+5.3 DRAWDOWN PROTECTION
+
+The primary risk is a persistent downtrend that fills ALL buy levels:
+
+- If unrealized loss on held inventory exceeds 3% of total account equity:
+  Cancel all remaining buy orders. Hold current inventory with a trailing
+  stop at 1.5 × daily ATR below the lowest filled level.
+- Daily drawdown limit: 2% (halt grid, evaluate)
+- Weekly: 4%
+- Monthly: 7%
+- System-wide: 15%
+
+5.4 HARD STOP LOSS ON TOTAL INVENTORY
+
+- If the total unrealized loss on all grid inventory reaches 5% of total
+  account equity, liquidate ALL inventory at market
+- This is the absolute worst-case protection — it means the grid has been
+  systematically buying into a severe downtrend
+
+5.5 CIRCUIT BREAKERS
+
+Trend Detection:
+- If price crosses through more than 8 consecutive grid levels in one direction
+  without a single reversal fill: the market is trending, not ranging
+- HALT the grid, cancel all orders
+- Wait 4 hours, re-evaluate range and regime
+
+Flash Crash:
+- If price drops > 5% in 5 minutes: cancel all buy orders immediately
+  (prevent catching the falling knife at every level)
+- Hold existing inventory, place a hard stop at 2% below current price
+
+Volume Spike:
+- If 15m volume exceeds 5x the 20-period average: potential breakout
+- Widen the grid spacing temporarily (cancel close-by orders, keep far orders)
+- Re-evaluate after 1 hour
+
+Kill Switch:
+- Cancel all open orders (potentially 20-50 orders across instruments)
+- Liquidate all inventory at market
+- Must complete within 15 seconds
+- Use DELETE /fapi/v1/allOpenOrders for bulk cancellation
+
+================================================================================
+SECTION 6: POSITION SIZING RULES
+================================================================================
+
+6.1 PER-LEVEL QUANTITY
+
+Quantity_Per_Level = Total_Strategy_Capital / Num_Levels / Current_Price
+
+Example: $10,000 capital, 20 levels, BTC at $65,000
+= $10,000 / 20 / $65,000 = 0.00769 BTC per level
+= $500 notional per level
+
+6.2 LEVERAGE
+
+- Maximum leverage: 2x (grid trading should use minimal leverage)
+- Preferred: 1x (spot-like, no leverage)
+- Higher leverage amplifies the downside trend risk that is grid trading's
+  primary weakness
+- If using 2x leverage, reduce the number of active buy levels to 10 (half)
+  to account for the amplified loss potential
+
+6.3 ORDER SIZE CONSTRAINTS
+
+- Each order must meet Binance minimum notional ($5 for USDT pairs typically)
+- If calculated Quantity_Per_Level results in notional < $5, reduce number
+  of levels until each order meets the minimum
+- Minimum practical capital for grid trading: $500 per instrument
+
+6.4 COMPOUND GROWTH
+
+- Realized profits increase the capital base for the next grid deployment
+- On each 24-hour grid refresh (Section 4.5), recalculate per-level quantities
+  using updated equity
+- Do NOT adjust quantities on active orders mid-cycle (too many cancellations
+  and replacements waste rate limit budget)
+
+================================================================================
+SECTION 7: FILTERS & DISQUALIFIERS
+================================================================================
+
+7.1 TREND DETECTION FILTER (MOST CRITICAL)
+- ADX(14) on 4h candles must be below 25 (ranging market)
+- If ADX rises above 25 while grid is active: begin shutdown (cancel new
+  buy orders, let sell orders work, do not redeploy)
+- EMA 20 vs EMA 50 on 4h: if they diverge by more than 2% of price, the
+  market is trending — do not deploy grid
+
+7.2 VOLATILITY FILTER
+- Daily ATR as percentage of price must be between 1.5% and 5%
+- Below 1.5%: insufficient movement to cross grid levels
+- Above 5%: risk of extreme breakout overwhelming the grid
+
+7.3 SPREAD FILTER
+- Bid-ask spread < 0.05% (grid relies on limit order fills — tight spreads
+  are essential for maker fee execution)
+
+7.4 FEE VIABILITY
+- Grid spacing must exceed 4x round-trip maker fees (Section 3.2 Step 6)
+
+7.5 WHIPSAW PROTECTION
+- After a grid shutdown (trend detected), minimum 12-hour cool-down before
+  redeploying
+
+7.6 CONSECUTIVE LOSS HANDLING
+- If 3 consecutive grid cycles result in net loss (inventory unrealized loss
+  exceeds realized grid profits): halt for 48 hours, review regime
+
+7.7 CORRELATION WITH STRAT-001
+- If STRAT-001 (trend following) has an active LONG position in the same
+  instrument, grid trading's systematic selling at higher levels conflicts
+- In this case: either skip the instrument for grid trading, or configure
+  the grid to be LONG-ONLY (only buy on dips, sell on grid levels, but do
+  not short at upper levels)
+
+================================================================================
+SECTION 8: 24/7 OPERATION HANDLING
+================================================================================
+
+8.1 STATE PERSISTENCE (Every 5 seconds)
+
+- All open orders: order_id, grid_level, side, price, quantity, status
+- Current inventory: quantity, average cost, unrealized PnL
+- Grid parameters: range boundaries, number of levels, grid spacing, grid type
+- Fill history: complete record of all grid fills with pair matching
+  (which buy fills correspond to which sell exits)
+- Cycle tracking: number of completed buy-sell cycles, total cycle profit
+
+8.2 STARTUP RECONCILIATION
+
+Critical for grid trading because of the large number of open orders:
+
+Step 1: Fetch all open orders from Binance: GET /fapi/v1/openOrders
+Step 2: Compare with persisted state
+Step 3: For orders on Binance NOT in state: cancel them (orphans from crash)
+Step 4: For orders in state NOT on Binance: check if they filled during
+  downtime via GET /fapi/v1/userTrades
+Step 5: Reconstruct the grid state: which levels are filled, which have
+  pending orders, which are empty
+Step 6: Place missing orders to complete the grid
+Step 7: Verify total inventory matches expected inventory
+
+This reconciliation may require 20-50 order checks — budget rate limits
+accordingly (approximately 50 weight over 2-3 minutes).
+
+8.3 ORDER BOOK MONITORING
+
+- Every 60 seconds, verify all grid orders are still active on Binance
+  (orders can be auto-cancelled by Binance for various reasons)
+- If any orders are missing, replace them immediately
+- Track order placement success rate — if > 5% of orders are mysteriously
+  cancelled, investigate (possible rate limit issue or margin issue)
+
+8.4 HEARTBEAT, MEMORY, LOGS
+Same as STRAT-001 Section 8.3-8.5, with strategy ID STRAT-005.
+
+Additional log: Grid Order Activity Log — every fill, every placement, every
+cancellation with grid level identification.
+
+================================================================================
+SECTION 9: PAPER TRADING SPECIFICATIONS
+================================================================================
+
+9.1 FILL SIMULATION
+- LIMIT buy orders fill when price trades AT OR BELOW the order price
+  AND sufficient volume exists at that level (check aggTrade volume)
+- LIMIT sell orders fill when price trades AT OR ABOVE the order price
+- Simulate partial fills if volume at the price level is less than order size
+- Apply maker fees (0.02%) since all grid orders are LIMIT postOnly
+
+9.2 ORDER BOOK SIMULATION
+- Track all simulated open orders in a virtual order book
+- Process fills in price-time priority (same as exchange matching engine)
+
+9.3 GO-LIVE CRITERIA (45-day minimum)
+- Net positive PnL after fees
+- Profitable in at least 60% of days
+- Maximum inventory drawdown < 5% of equity
+- Successfully detected and paused during at least 1 trending period
+- Grid cycle completion rate > 50% (more than half of buy fills had
+  corresponding sell fills within the measurement period)
+
+================================================================================
+SECTION 10: PERFORMANCE METRICS
+================================================================================
+
+10.1 STANDARD METRICS
+Same as STRAT-001 Section 10.1
+
+10.2 STRATEGY-SPECIFIC METRICS
+
+- Grid Cycle Count: total completed buy-sell cycles
+- Average Profit Per Cycle: mean net profit per completed cycle
+- Grid Cycle Frequency: cycles per hour/day
+- Grid Utilization Rate: percentage of grid levels that completed at least
+  one cycle per day
+- Inventory Exposure Time: percentage of time holding unrealized inventory
+- Maximum Concurrent Inventory: highest number of filled buy levels at once
+- Range Containment Rate: percentage of time price remained within grid range
+- Breakout Count: number of times price broke above or below grid boundaries
+- Redeployment Frequency: how often the grid was reset and redeployed
+- Upside vs Downside Breakout Performance: PnL impact of each breakout type
+- Fee Efficiency: actual fees paid vs theoretical maker fees (were all orders
+  truly limit fills or did some incur taker fees?)
+- Order Placement Latency: time from fill detection to new order placement
+
+================================================================================
+SECTION 11: EDGE CASES & FAILURE MODES
+================================================================================
+
+11.1 PRICE GAPS THROUGH MULTIPLE LEVELS
+- In crypto, price can gap through several grid levels in seconds (especially
+  during liquidation cascades)
+- Multiple buy orders may fill simultaneously without corresponding sells
+- Detection: ORDER_TRADE_UPDATE events arriving in rapid succession
+- Response: process all fills, place corresponding sell orders for each,
+  but check inventory limits (Section 5.2) before placing the last buy orders
+
+11.2 ORDER CANCELLED BY BINANCE (MARGIN/RISK)
+- Binance may auto-cancel limit orders if account margin drops
+- Detection: order status changes to CANCELED in user data stream
+- Response: check account margin, reduce grid level count if necessary,
+  re-place critical orders first (closest to current price)
+
+11.3 FILL NOTIFICATION DELAY
+- If fill notification arrives late, the price may have moved away from the
+  optimal next-order placement level
+- Response: place the next order at the GRID LEVEL price (not current price),
+  even if it would be filled immediately (crossing the spread)
+- If it would cross the spread: use LIMIT at grid level and accept taker fee
+
+11.4 ALL BUY LEVELS FILL (MAXIMUM INVENTORY)
+- Price has dropped through the entire grid — worst case
+- All capital is deployed as inventory, all unrealized loss
+- Hard stop at Section 5.4 threshold (5% of equity) provides protection
+- This scenario is why trend detection (Section 7.1) is so critical
+
+11.5 BINANCE OPEN ORDER LIMIT
+- Binance has limits on open orders per symbol (typically 200)
+- Grid trading can generate 20-50 open orders per instrument × 4 instruments
+  = up to 200 orders total
+- Stay within limits by capping at 40 open orders per instrument
+- If approaching the limit, prioritize orders closest to current price
+
+================================================================================
+SECTION 12: DEPENDENCIES & INTEGRATION POINTS
+================================================================================
+
+12.1 UNIFIED WEBSOCKET MANAGER
+Strategy ID: STRAT-005
+Critical dependency: ORDER_TRADE_UPDATE events must be delivered to this
+strategy with absolute minimum latency (< 100ms from receipt)
+The fill-triggered order placement mechanism (Section 3.4) is the entire
+revenue engine of this strategy
+
+12.2 CENTRALIZED RATE LIMIT MANAGER
+- Higher order volume than other strategies: budget 250 weight/minute
+- Burst capacity during grid deployment/reset: 500 weight for 2 minutes
+- Order placement priority: NORMAL (grid orders are not time-critical like
+  stop losses — a 1-second delay is acceptable)
+- Batch order placement preferred to minimize rate limit consumption
+
+12.3 SHARED RISK MANAGER
+- Reports: number of open orders, total inventory value, unrealized PnL,
+  grid range parameters
+- Cross-strategy: if STRAT-001 signals a strong trend and this strategy's
+  trend filter hasn't caught it yet, the risk manager should warn or
+  override with a grid shutdown
+
+12.4 DATABASE
+- Grid orders generate significantly more records than other strategies
+- Schema needs: grid_id, level_number, buy_fill_id, sell_fill_id, cycle_profit,
+  cycle_duration, grid_parameters (range, levels, spacing)
+- Archival policy: grid order history older than 90 days can be archived
+  to cold storage (it's high-volume but low-value data)
+
+12.5 DASHBOARD
+- Visual grid display: show current price position within the grid, filled
+  levels, pending orders, inventory heat map
+- Real-time cycle counter and profit ticker
+- Range boundary display with breakout warnings
+
+================================================================================
+END OF DOCUMENT
+================================================================================

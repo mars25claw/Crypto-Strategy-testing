@@ -1,0 +1,574 @@
+================================================================================
+SIGNAL-ENHANCED DOLLAR COST AVERAGING (DCA)
+ALGORITHMIC TRADING BOT — BUILD INSTRUCTIONS
+================================================================================
+Version: 1.0
+Classification: Proprietary — Quantitative Trading Desk
+Strategy ID: STRAT-009-SIGNAL-DCA
+================================================================================
+
+TABLE OF CONTENTS
+1.  Strategy Overview
+2.  Required Data Streams
+3.  Entry Logic
+4.  Exit Logic
+5.  Risk Management Rules
+6.  Position Sizing Rules
+7.  Filters & Disqualifiers
+8.  24/7 Operation Handling
+9.  Paper Trading Specifications
+10. Performance Metrics
+11. Edge Cases & Failure Modes
+12. Dependencies & Integration Points
+
+================================================================================
+SECTION 1: STRATEGY OVERVIEW
+================================================================================
+
+1.1 WHAT THIS STRATEGY DOES
+
+This strategy enhances traditional dollar-cost averaging by dynamically
+adjusting purchase amounts based on quantitative signals. Instead of buying
+a fixed dollar amount at fixed intervals (vanilla DCA), the bot buys MORE
+when conditions indicate favorable prices (oversold, extreme fear, below key
+moving averages) and LESS when conditions indicate overvaluation (overbought,
+extreme greed, extended above key moving averages). It is a long-term
+accumulation strategy, not a trading strategy.
+
+1.2 MARKET CONDITIONS TARGETED
+
+- ALL market conditions (DCA is designed to work through bull and bear cycles)
+- The signal enhancement specifically targets: buying heavier during crashes,
+  corrections, and fear; buying lighter during euphoria and overextension
+- Best suited for long-term accumulation (6+ month horizon minimum)
+
+1.3 THEORETICAL EDGE
+
+- 5-year weekly DCA into BTC ($10/week from 2019-2024) produced 202% return
+- Signal-enhanced DCA using Fear & Greed contrarian approach produced 1,145%
+  cumulative return (2018-2025), outperforming buy-and-hold by 99 percentage
+  points
+- Value averaging (adjusting amounts to target fixed growth) achieves lower
+  average cost than standard DCA
+- The mathematical edge: buying more at lower prices and less at higher prices
+  GUARANTEES a lower average cost than fixed-amount DCA (assuming price
+  eventually reverts or appreciates)
+
+1.4 TARGET INSTRUMENTS
+
+Primary: BTC/USDT, ETH/USDT (SPOT only — no futures for DCA)
+Secondary: SOL/USDT, BNB/USDT (optional, configurable)
+Maximum instruments: 4
+All purchases are on SPOT market, held in spot wallet
+
+1.5 TIMEFRAMES
+
+DCA interval: Configurable (daily, weekly, bi-weekly, monthly)
+Default: WEEKLY (every Monday at 10:00 UTC)
+Signal calculation: Daily (update signals once per day at 00:00 UTC)
+Monitoring: Hourly (for crash-buy triggers and health checks)
+
+================================================================================
+SECTION 2: REQUIRED DATA STREAMS
+================================================================================
+
+2.1 WEBSOCKET STREAMS (MINIMAL — this is a low-frequency strategy)
+
+Per instrument (max 4):
+- <symbol>@kline_1d   — Daily candle for signal calculation
+- <symbol>@kline_1h   — Hourly for crash detection
+- <symbol>@bookTicker  — Execution pricing at purchase time
+- <symbol>@markPrice@1s — Price monitoring
+
+Total streams: 16 (4 instruments × 4 streams)
+
+2.2 REST API ENDPOINTS
+
+Market Data:
+- GET /api/v3/klines — Historical daily and weekly candles for indicator
+  warm-up. 200 daily candles per instrument on startup. Weight: 5 each.
+
+Account:
+- GET /api/v3/account — Spot account balance. Weight: 10. Called before each
+  purchase and every hour.
+
+Order:
+- POST /api/v3/order — Spot market buy. Weight: 1. Called at most once per
+  DCA interval per instrument (very low frequency).
+
+2.3 EXTERNAL DATA SOURCES
+
+Fear & Greed Index:
+- Source: alternative.me API (https://api.alternative.me/fng/)
+- Frequency: Query once daily at 00:00 UTC
+- Returns: value (0-100), classification (Extreme Fear/Fear/Neutral/Greed/
+  Extreme Greed)
+- If API is unavailable: fall back to internal RSI-based sentiment proxy
+
+On-Chain Metrics (OPTIONAL — enhances signals but not required):
+- SOPR (Spent Output Profit Ratio): If below 1.0, market is selling at a
+  loss (historically a buy signal for long-term accumulation)
+- MVRV Ratio: If below 1.0, market cap is below realized cap (deep value)
+- Sources: Glassnode API, CryptoQuant API (require paid subscriptions)
+- If unavailable: strategy operates with technical signals only
+
+================================================================================
+SECTION 3: ENTRY LOGIC
+================================================================================
+
+3.1 SCHEDULED DCA — BASE PURCHASE
+
+At every DCA interval (default: Monday 10:00 UTC):
+
+Step 1: Calculate Base Amount
+- Base_Amount_USDT = configured recurring investment amount
+  Default: configurable, e.g., $100/week per instrument
+  This is the STANDARD amount when all signals are neutral
+
+Step 2: Calculate Signal Multiplier
+The signal multiplier adjusts the base amount up or down based on market
+conditions. It ranges from 0.25x (buy very little) to 3.0x (buy aggressively).
+
+Signal A: RSI(14) on Daily Candles
+- RSI < 25:  Multiplier component = 1.5 (deeply oversold, buy more)
+- RSI 25-35: Multiplier component = 1.25
+- RSI 35-50: Multiplier component = 1.0 (neutral)
+- RSI 50-65: Multiplier component = 0.85
+- RSI 65-75: Multiplier component = 0.7 (overbought, buy less)
+- RSI > 75:  Multiplier component = 0.5 (extremely overbought, buy minimum)
+
+Signal B: Fear & Greed Index
+- Value 0-10 (Extreme Fear):   Multiplier component = 1.75
+- Value 11-25 (Fear):          Multiplier component = 1.4
+- Value 26-45 (Moderate Fear):  Multiplier component = 1.1
+- Value 46-55 (Neutral):       Multiplier component = 1.0
+- Value 56-75 (Greed):         Multiplier component = 0.75
+- Value 76-90 (High Greed):    Multiplier component = 0.5
+- Value 91-100 (Extreme Greed): Multiplier component = 0.25
+
+Signal C: Price vs 200-Day SMA
+- Price < 200 SMA × 0.80 (>20% below SMA): Multiplier component = 1.5
+- Price < 200 SMA × 0.90 (10-20% below):    Multiplier component = 1.25
+- Price < 200 SMA (below SMA):              Multiplier component = 1.1
+- Price > 200 SMA (above SMA):              Multiplier component = 0.9
+- Price > 200 SMA × 1.20 (>20% above):       Multiplier component = 0.75
+- Price > 200 SMA × 1.40 (>40% above):       Multiplier component = 0.5
+
+Signal D: SOPR (if available)
+- SOPR < 0.95: Multiplier component = 1.3 (market selling at heavy loss)
+- SOPR 0.95-1.0: Multiplier component = 1.1 (selling at slight loss)
+- SOPR 1.0-1.05: Multiplier component = 1.0 (neutral)
+- SOPR > 1.05: Multiplier component = 0.85 (market selling at profit)
+
+Step 3: Combine Multipliers
+Final_Multiplier = geometric mean of all available signal components
+= (Component_A × Component_B × Component_C × Component_D)^(1/N)
+where N = number of active signals (3 if no on-chain, 4 if available)
+
+Clamp Final_Multiplier between 0.25 and 3.0
+
+Step 4: Calculate Purchase Amount
+Purchase_Amount = Base_Amount × Final_Multiplier
+
+Step 5: Budget Verification
+- Monthly budget cap: 4.5 × Base_Amount × Num_Intervals_Per_Month
+  (allows up to 4.5x average spending, not infinite)
+- If Purchase_Amount would exceed remaining monthly budget: cap at remaining
+- If remaining monthly budget is less than minimum purchase: skip this interval
+
+Step 6: Execute Purchase
+- Order type: MARKET buy on spot
+- Timing: execute at the scheduled time (no timing optimization for DCA)
+- Log: purchase amount USDT, quantity received, execution price, signal
+  multiplier, individual signal values
+
+3.2 CRASH-BUY TRIGGER (OPPORTUNISTIC)
+
+In addition to scheduled DCA, deploy extra capital during sharp crashes:
+
+Detection:
+- If price drops > 10% from its 7-day high: Level 1 crash-buy trigger
+- If price drops > 20% from its 30-day high: Level 2 crash-buy trigger
+- If price drops > 30% from its 90-day high: Level 3 crash-buy trigger
+- Check hourly using 1h klines
+
+Crash-Buy Amounts:
+- Level 1: 1.0 × weekly Base_Amount as bonus purchase
+- Level 2: 2.0 × weekly Base_Amount as bonus purchase
+- Level 3: 3.0 × weekly Base_Amount as bonus purchase
+
+Cooldown:
+- Level 1: can trigger once per 7 days
+- Level 2: can trigger once per 14 days
+- Level 3: can trigger once per 30 days
+- If multiple levels trigger simultaneously: execute ONLY the highest level
+
+Monthly Budget Impact:
+- Crash-buys come from a SEPARATE budget: 2× monthly DCA budget reserved
+  for crash-buy opportunities
+- If crash-buy budget is exhausted: no more crash-buys until next month
+
+Execution:
+- Place MARKET buy order immediately on detection
+- Do NOT wait for further decline (do not try to time the bottom)
+- Log with crash-buy identifier and level
+
+3.3 VALUE AVERAGING MODE (ALTERNATIVE TO SIGNAL-ENHANCED DCA)
+
+This is an ALTERNATIVE mode (configurable, not active simultaneously with
+signal-enhanced DCA):
+
+- Set a target portfolio growth rate: e.g., $100/week increase in total value
+- At each interval:
+  Target_Value = Initial_Value + (Week_Number × Weekly_Target)
+  Current_Value = Holdings × Current_Price
+  Required_Purchase = Target_Value − Current_Value
+  If Required_Purchase > 0: buy that amount
+  If Required_Purchase < 0: do NOT sell (DCA never sells, only buys less)
+  Minimum purchase: $0 (skip if portfolio is already above target)
+  Maximum purchase: 3 × Weekly_Target (cap to prevent excessive buying in crashes)
+
+================================================================================
+SECTION 4: EXIT LOGIC
+================================================================================
+
+4.1 THIS STRATEGY DOES NOT ACTIVELY EXIT
+
+DCA is a long-term accumulation strategy. It does NOT have standard exit logic.
+Accumulated assets are HELD indefinitely unless one of the following occurs:
+
+4.2 MANUAL EXIT (OPERATOR-TRIGGERED ONLY)
+
+- The operator decides to take profits or liquidate
+- Execution: MARKET sell or staged LIMIT sells over 24-48 hours
+- This is NEVER automated — always requires manual dashboard action
+
+4.3 EMERGENCY STOP-LOSS (OPTIONAL, CONFIGURABLE)
+
+If the operator configures a portfolio-level stop loss:
+- Trigger: total DCA portfolio value drops below X% of total invested amount
+  Default: 50% (i.e., portfolio is worth less than half of amount invested)
+- Action: HALT new purchases. Do NOT auto-sell (selling at 50% loss locks in
+  the loss; DCA philosophy is to continue buying through corrections)
+- Alert operator with current portfolio value and signal assessment
+- This is a PAUSE mechanism, not an auto-liquidation
+
+4.4 TAKE-PROFIT REBALANCING (OPTIONAL, CONFIGURABLE)
+
+If configured, when total portfolio value exceeds invested amount by X%:
+- Default threshold: 200% (portfolio 3× invested amount)
+- Action: sell 10% of holdings to realize partial profits
+- Transfer realized profits to USDT reserve (available for crash-buy or
+  other strategies)
+- This is a GENTLE rebalancing, not a full exit
+- Maximum rebalancing frequency: once per quarter
+
+================================================================================
+SECTION 5: RISK MANAGEMENT RULES
+================================================================================
+
+5.1 CAPITAL ALLOCATION
+
+- Maximum capital for this strategy: 30% of total account equity
+- This capital is deployed GRADUALLY over time (not all at once)
+- Monthly DCA budget: configurable, default $400/month for primary instruments
+  + $200/month crash-buy reserve = $600/month total
+- The strategy's capital footprint grows over time as assets are accumulated
+
+5.2 DIVERSIFICATION
+
+- No single asset should exceed 60% of DCA portfolio value
+  If BTC appreciation causes it to exceed 60%, reduce BTC DCA allocation
+  and increase other instruments until rebalanced
+- Minimum 2 instruments (BTC + ETH at minimum)
+
+5.3 DRAWDOWN MANAGEMENT
+
+- This strategy does NOT use traditional drawdown stops because DCA
+  EXPECTS to buy through drawdowns
+- Instead, use a "conviction monitor":
+  If portfolio is down > 30% from peak invested value AND all signals
+  indicate extreme fear: INCREASE purchase amounts (this is the strategy
+  working as designed)
+  If portfolio is down > 50%: halt and alert operator (as per Section 4.3)
+
+5.4 BUDGET DISCIPLINE
+
+- Monthly budget is a HARD LIMIT (including crash-buys)
+- Total_Monthly_Spend ≤ Monthly_DCA_Budget + Monthly_Crash_Reserve
+- The bot must track spending per calendar month and refuse purchases
+  that exceed the budget
+- Budget resets at 00:00 UTC on the 1st of each month
+
+5.5 CIRCUIT BREAKERS
+
+Exchange Issue:
+- If spot order fails 3 times: halt DCA for 24 hours, alert operator
+- If balance is insufficient for minimum purchase: alert operator (funding
+  needed)
+
+Data Feed Issue:
+- If Fear & Greed API is unavailable: use internal RSI-only multiplier
+  (reduce to 2 signal components)
+- If kline data is stale (> 2 hours old): delay purchase until fresh data
+
+Kill Switch:
+- Cancels any pending orders (rare for DCA — most are market orders)
+- Does NOT liquidate holdings (DCA holdings are long-term)
+- Halts all future scheduled purchases until manual restart
+
+================================================================================
+SECTION 6: POSITION SIZING RULES
+================================================================================
+
+6.1 BASE AMOUNT CONFIGURATION
+
+Per instrument:
+- BTC: configurable, e.g., $50/week base
+- ETH: configurable, e.g., $30/week base
+- SOL: configurable, e.g., $10/week base
+- BNB: configurable, e.g., $10/week base
+- Total weekly base: $100 (example)
+
+6.2 SIGNAL-ADJUSTED AMOUNT
+
+Purchase_Amount = Base_Amount × Final_Multiplier (Section 3.1)
+
+Constraints:
+- Minimum purchase: max($5, exchange minimum notional)
+- Maximum single purchase: 3.0 × Base_Amount
+- Monthly cap: 4.5 × Base_Amount × intervals_per_month
+
+6.3 CRASH-BUY SIZING
+
+Separate from regular DCA budget:
+- Level 1: 1.0 × weekly Base_Amount
+- Level 2: 2.0 × weekly Base_Amount
+- Level 3: 3.0 × weekly Base_Amount
+- Total crash-buy budget per month: 2.0 × monthly Base_Amount
+
+6.4 NO LEVERAGE
+
+- DCA is executed EXCLUSIVELY on SPOT market
+- ZERO leverage at all times
+- No margin, no futures, no derivatives
+
+================================================================================
+SECTION 7: FILTERS & DISQUALIFIERS
+================================================================================
+
+7.1 SCHEDULE ADHERENCE
+- Do NOT deviate from the scheduled interval by more than 1 hour
+  (If the bot is down at scheduled time, execute within 1 hour of restart)
+- If more than 1 hour late: skip this interval, execute at next scheduled time
+
+7.2 BUDGET FILTER
+- Before every purchase: verify remaining monthly budget ≥ purchase amount
+- If not: reduce to remaining budget or skip if below minimum
+
+7.3 EXCHANGE HEALTH FILTER
+- Before every purchase: verify spot order book has reasonable spread (< 0.1%)
+- If spread is abnormally wide: delay purchase by 1 hour and re-check
+
+7.4 SIGNAL DATA FRESHNESS
+- RSI must be calculated from data no older than 4 hours
+- Fear & Greed index must be from today (API updates daily)
+- 200 SMA must be calculated from data no older than 24 hours
+- If any signal data is stale: use last known valid value with a log warning
+
+7.5 NO CONSECUTIVE LOSS HANDLING
+- DCA does not have "losses" in the traditional sense — purchases are not
+  individual trades with P&L
+- Instead, track the rolling cost basis vs current value
+- If cost basis is > 40% above current value: alert operator, continue DCA
+  unless emergency stop is triggered
+
+================================================================================
+SECTION 8: 24/7 OPERATION HANDLING
+================================================================================
+
+8.1 STATE PERSISTENCE (Every 30 seconds — lower frequency than trading strategies)
+
+- Holdings: quantity per instrument, total invested USDT per instrument,
+  average cost basis per instrument, current market value
+- Schedule state: next DCA timestamp, last executed DCA timestamp
+- Signal values: current RSI, Fear & Greed, 200 SMA, SOPR
+- Budget tracking: monthly DCA spend to date, crash-buy spend to date
+- Crash-buy cooldowns: last trigger timestamp per level per instrument
+- Historical purchases: complete log of every purchase with amount, price,
+  quantity, signal multiplier, signal values
+
+8.2 STARTUP RECONCILIATION
+
+- Load persisted state
+- Fetch current spot balances from GET /api/v3/account
+- Compare holdings vs expected: if discrepancy > 0.1%, log and alert
+- Check if any scheduled DCA was missed during downtime:
+  If YES and within 1 hour of scheduled time: execute immediately
+  If YES and more than 1 hour past: skip, wait for next scheduled time
+- Recalculate all signal values from fresh data
+
+8.3 SCHEDULE MANAGEMENT
+
+- The DCA scheduler must survive restarts: scheduled time is persisted
+- If the bot restarts just before a scheduled DCA: it must detect and execute
+- If the bot restarts just after: it must detect and NOT double-execute
+- Use the "last executed timestamp" to prevent double-execution:
+  If last_executed_timestamp is within 6 hours of the scheduled time for the
+  SAME interval: do NOT execute again
+
+8.4 HEARTBEAT, MEMORY, LOGS
+Same as previous strategies with strategy ID STRAT-009.
+Lower frequency heartbeat: every 60 seconds (low-urgency strategy).
+
+================================================================================
+SECTION 9: PAPER TRADING SPECIFICATIONS
+================================================================================
+
+9.1 FILL SIMULATION
+- MARKET orders fill at current ask + 0.01% slippage
+- Apply spot taker fee (0.10% or applicable tier)
+- Track paper portfolio value over time
+
+9.2 SIGNAL SIMULATION
+- Use actual historical Fear & Greed data (available via API archives)
+- Use actual historical RSI and price data
+
+9.3 GO-LIVE CRITERIA (90-day minimum for DCA)
+
+- The strategy has executed on schedule without missed intervals
+- Signal multiplier logic produced a lower average cost basis than vanilla
+  DCA (fixed amount, same intervals) over the same period
+- At least 1 crash-buy trigger was successfully detected and executed
+- Budget constraints were never breached
+- Portfolio tracking is accurate (calculated value within 0.5% of actual
+  spot holdings × market price)
+
+================================================================================
+SECTION 10: PERFORMANCE METRICS
+================================================================================
+
+10.1 STANDARD DCA METRICS (NOT standard trading metrics)
+
+- Total Invested: cumulative USDT spent on purchases
+- Current Portfolio Value: holdings × current price per instrument
+- Total Return: (Current_Value − Total_Invested) / Total_Invested × 100%
+- Average Cost Basis: Total_Invested / Total_Holdings per instrument
+- Cost Basis vs Current Price: how far above/below cost basis is current price
+- DCA vs Lump Sum Comparison: what would the return be if all capital had been
+  deployed at the start vs DCA'd in over time?
+- Signal-Enhanced vs Vanilla DCA: what would the return be with fixed amounts?
+  (This is the KEY metric — the signal enhancement must add value)
+
+10.2 STRATEGY-SPECIFIC METRICS
+
+- Signal Multiplier Distribution: histogram of multiplier values over time
+- Fear & Greed Correlation: does buying more during fear produce better returns?
+- RSI Correlation: does buying more when RSI is low produce better returns?
+- Crash-Buy Performance: PnL on crash-buy purchases specifically
+  (Track each crash-buy separately to evaluate its impact)
+- Cost Basis Improvement: percentage by which signal-enhanced cost basis is
+  better than vanilla DCA cost basis
+- Monthly Spend Variance: how much does actual spending vary month to month?
+- Accumulation Rate: units accumulated per dollar spent over time
+- Time-Weighted Return: measures the investment manager's performance
+  independent of cash flow timing
+
+10.3 PORTFOLIO ANALYTICS
+
+- Asset allocation breakdown (BTC %, ETH %, etc.)
+- Unrealized PnL per instrument
+- Historical cost basis chart overlaid on price chart
+- Cumulative investment curve vs portfolio value curve
+
+================================================================================
+SECTION 11: EDGE CASES & FAILURE MODES
+================================================================================
+
+11.1 ALL SIGNALS SIMULTANEOUSLY EXTREME
+- If RSI < 20, Fear & Greed < 10, price 30% below 200 SMA, and SOPR < 0.9:
+  The multiplier could be very high (2.5-3.0x)
+- This is BY DESIGN — buying aggressively during maximum fear is the core edge
+- The monthly budget cap prevents unlimited spending
+- The crash-buy budget provides additional firepower for these moments
+
+11.2 SIGNALS CONFLICT
+- RSI says oversold (buy more) but Fear & Greed says greed (buy less)
+- The geometric mean naturally handles this: conflicting signals produce a
+  near-neutral multiplier (close to 1.0)
+- This is the desired behavior — when signals disagree, default to base amount
+
+11.3 EXTENDED BEAR MARKET (12+ MONTHS)
+- The strategy will continue buying throughout, potentially accumulating
+  significant unrealized losses
+- The emergency stop (Section 4.3) provides a safety net at 50% drawdown
+- Historical evidence supports continued DCA through bear markets: every
+  past bear market has eventually recovered and rewarded DCA investors
+
+11.4 STABLECOIN DEPEG
+- If USDT depegs from $1.00 (e.g., trades at $0.95), all USDT-denominated
+  calculations are distorted
+- Monitor USDT/USD price via external source
+- If USDT depegs > 2%: halt all purchases and alert operator
+
+11.5 EXCHANGE DELISTS AN INSTRUMENT
+- If a DCA target instrument is announced for delisting:
+  Halt purchases for that instrument
+  Alert operator with current holdings
+  Do NOT auto-sell (operator may want to withdraw to external wallet)
+
+11.6 FEAR & GREED API DEPRECATION
+- If the external API becomes permanently unavailable:
+  Switch to internal sentiment proxy:
+  Internal_FG = weighted average of (RSI normalization, volume change,
+  social media volume via CryptoCompare if available, price momentum)
+  This is a degraded but functional fallback
+
+================================================================================
+SECTION 12: DEPENDENCIES & INTEGRATION POINTS
+================================================================================
+
+12.1 UNIFIED WEBSOCKET MANAGER
+Strategy ID: STRAT-009
+Minimal stream requirements (16 streams)
+LOW priority for message delivery (DCA is not latency-sensitive)
+
+12.2 CENTRALIZED RATE LIMIT MANAGER
+Budget: 50 weight/minute (very low API usage)
+Order priority: NORMAL (DCA purchases are not time-critical to the millisecond)
+Startup warm-up: 200 weight one-time for historical data
+
+12.3 SHARED RISK MANAGER
+Reports: total DCA portfolio value, current holdings per instrument,
+monthly spend to date
+Cross-strategy: DCA holdings are LONG-ONLY spot. Other strategies should
+account for the portfolio's long bias in correlation calculations.
+If STRAT-004 (mean reversion) or STRAT-001 (trend following) has a SHORT
+position in BTC while DCA holds significant BTC: the risk manager should
+note the natural hedge but NOT modify either strategy's behavior.
+
+12.4 EXTERNAL API DEPENDENCY
+- Fear & Greed API: alternative.me
+- On-chain APIs (optional): Glassnode, CryptoQuant
+- These are EXTERNAL dependencies outside Binance
+- Failure handling: graceful degradation to internal-only signals
+- The strategy MUST function (with reduced signal quality) even if ALL
+  external APIs are unavailable
+
+12.5 DATABASE
+- Purchase history table: instrument, timestamp, amount_usdt, quantity,
+  price, multiplier, signal_a, signal_b, signal_c, signal_d, is_crash_buy,
+  crash_level
+- Portfolio tracking table: daily snapshots of holdings and value
+- Budget tracking table: monthly spending by category
+
+12.6 DASHBOARD
+- Portfolio overview: pie chart of holdings, total value, total return
+- DCA schedule: next purchase time, countdown
+- Signal dashboard: current multiplier, individual signal values
+- Historical chart: cost basis line vs price line vs vanilla DCA line
+- Monthly spending tracker with budget utilization gauge
+
+================================================================================
+END OF DOCUMENT
+================================================================================

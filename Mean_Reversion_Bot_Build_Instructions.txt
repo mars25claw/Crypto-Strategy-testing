@@ -1,0 +1,471 @@
+================================================================================
+MEAN REVERSION
+ALGORITHMIC TRADING BOT — BUILD INSTRUCTIONS
+================================================================================
+Version: 1.0
+Classification: Proprietary — Quantitative Trading Desk
+Strategy ID: STRAT-004-MEAN-REVERSION
+================================================================================
+
+TABLE OF CONTENTS
+1.  Strategy Overview
+2.  Required Data Streams
+3.  Entry Logic
+4.  Exit Logic
+5.  Risk Management Rules
+6.  Position Sizing Rules
+7.  Filters & Disqualifiers
+8.  24/7 Operation Handling
+9.  Paper Trading Specifications
+10. Performance Metrics
+11. Edge Cases & Failure Modes
+12. Dependencies & Integration Points
+
+================================================================================
+SECTION 1: STRATEGY OVERVIEW
+================================================================================
+
+1.1 WHAT THIS STRATEGY DOES
+
+This strategy bets that overextended single-asset prices will revert to their
+statistical mean. When an asset's price deviates significantly from its moving
+average (measured by Z-score, Bollinger Bands, or RSI extremes), the strategy
+enters a counter-trend position expecting a snapback. It is designed as a
+complement to STRAT-001 (trend following) — active during ranging markets
+where trend following underperforms.
+
+1.2 MARKET CONDITIONS TARGETED
+
+- Range-bound, choppy, sideways markets
+- Post-trend exhaustion — after strong moves when mean-reverting behavior is
+  most likely
+- Assets exhibiting Hurst exponent < 0.5 (confirmed mean-reverting dynamics)
+- High-volatility but non-trending environments (whipsawing conditions)
+
+1.3 THEORETICAL EDGE
+
+- Backtesting shows win rates of 55-70% for mean reversion (higher than
+  momentum's 35-45%)
+- Combining mean reversion with momentum reduces maximum drawdown from 29%
+  to 20% while smoothing the equity curve
+- Mean reversion capital is deployed only 3-7% of the time, making it a
+  capital-efficient opportunistic strategy
+- The edge exploits short-term overreaction by retail traders, temporary
+  liquidity imbalances, and stop-loss cascade reversals
+
+1.4 TARGET INSTRUMENTS
+
+Primary: BTC/USDT, ETH/USDT perpetual futures
+Secondary: SOL/USDT, BNB/USDT, XRP/USDT, ADA/USDT, AVAX/USDT, DOGE/USDT
+Universe cap: Maximum 8 instruments
+Only instruments with Hurst exponent < 0.5 on the analysis timeframe are eligible
+
+1.5 TIMEFRAMES
+
+Primary signal: 4-hour candles
+Regime filter: Daily candles (Hurst exponent, ADX check)
+Entry timing: 15-minute candles
+Position monitoring: 1-minute candles
+
+================================================================================
+SECTION 2: REQUIRED DATA STREAMS
+================================================================================
+
+2.1 WEBSOCKET STREAMS
+
+Per instrument (maximum 8 instruments):
+- <symbol>@kline_1m    — Position monitoring, micro-reversion detection
+- <symbol>@kline_15m   — Entry timing and confirmation
+- <symbol>@kline_4h    — Primary signal generation
+- <symbol>@kline_1d    — Regime filter, Hurst calculation trigger
+- <symbol>@bookTicker  — Execution pricing
+- <symbol>@depth20@100ms — Liquidity assessment, order book imbalance
+- <symbol>@markPrice@1s — PnL tracking
+- <symbol>@aggTrade    — Volume spike detection
+
+Total streams per instrument: 8
+Maximum total streams: 64
+
+2.2 REST API ENDPOINTS
+
+Same structure as STRAT-001 Section 2.2, with:
+- Historical kline warm-up: 200 candles per timeframe per instrument
+- Startup cost: 8 instruments × 4 timeframes × 5 weight = 160 weight
+
+2.3 USER DATA STREAM
+Same as STRAT-001 Section 2.3
+
+================================================================================
+SECTION 3: ENTRY LOGIC
+================================================================================
+
+3.1 REGIME CLASSIFICATION (DAILY — RUN AT 00:00 UTC)
+
+Before any trading signals are evaluated, classify the current market regime
+for each instrument:
+
+Step 1: Hurst Exponent Calculation
+- Use 100 daily closes (rolling window)
+- Method: Rescaled Range (R/S) analysis
+- Classification:
+  H < 0.40: Strong mean reversion — use AGGRESSIVE entry thresholds
+  H 0.40-0.50: Moderate mean reversion — use STANDARD thresholds
+  H 0.50-0.55: Random walk — PAUSE this instrument (neither trending nor reverting)
+  H > 0.55: Trending — DISABLE mean reversion, defer to STRAT-001
+
+Step 2: ADX Regime Check (Daily)
+- ADX(14) on daily candles
+- ADX < 20: Ranging market — IDEAL for mean reversion
+- ADX 20-25: Transitional — use STANDARD thresholds, reduced size
+- ADX > 25: Trending — DISABLE mean reversion for this instrument
+
+Step 3: Combined Regime Decision
+- Mean reversion is ACTIVE only if: Hurst < 0.50 AND ADX < 25
+- If either condition fails, the instrument is excluded from the active
+  universe until the next daily recalculation
+
+3.2 PRIMARY ENTRY SIGNALS
+
+Signal A: Bollinger Band Extreme
+- Calculate Bollinger Bands on 4h candles: 20-period SMA ± 2.5 standard deviations
+  (Note: 2.5σ, not standard 2.0σ, to reduce false signals in crypto)
+- LONG signal: 4h candle closes BELOW the lower Bollinger Band
+- SHORT signal: 4h candle closes ABOVE the upper Bollinger Band
+
+Signal B: Z-Score Extreme
+- Calculate 50-period rolling mean and standard deviation on 4h closes
+- Z = (Close − Mean_50) / StdDev_50
+- LONG signal: Z < −2.0
+- SHORT signal: Z > +2.0
+
+Signal C: RSI Extreme
+- RSI(14) on 4h candles
+- LONG signal: RSI drops below 25 (stricter than standard 30)
+- SHORT signal: RSI rises above 75 (stricter than standard 70)
+
+ENTRY REQUIREMENT: At least 2 of 3 signals must agree.
+- If all 3 agree: Full position size (STRONG signal)
+- If 2 of 3 agree: 75% position size (MODERATE signal)
+- If only 1 signals: NO TRADE
+
+3.3 REVERSAL CONFIRMATION (REQUIRED)
+
+After the extreme is detected, do NOT enter immediately. Wait for evidence
+that the reversal has begun:
+
+Step 1: Wait for a 15-minute candle that closes in the reversal direction
+- For LONG: a 15m candle that closes GREEN (close > open) after the extreme
+- For SHORT: a 15m candle that closes RED (close < open) after the extreme
+
+Step 2: Volume Confirmation on the Reversal Candle
+- The reversal candle on 15m must have volume > 1.0x the 20-period average
+  (at least average volume — proof of participation in the reversal)
+
+Step 3: Order Book Imbalance Check
+- At the moment of entry signal, check the depth20 order book:
+  Buy_Depth = sum of bid quantities at top 10 levels
+  Sell_Depth = sum of ask quantities at top 10 levels
+  Imbalance_Ratio = Buy_Depth / Sell_Depth
+- For LONG entry: Imbalance_Ratio must be > 1.2 (more buy pressure than sell)
+- For SHORT entry: Imbalance_Ratio must be < 0.8 (more sell pressure than buy)
+- If imbalance does not confirm: wait for next 15m candle (up to 3 candles)
+- If no confirmation within 3 candles (45 minutes): cancel the signal
+
+3.4 MAXIMUM WAIT TIME
+
+- The extreme signal on 4h is valid for the duration of that 4h candle PLUS
+  the next 4h candle (8 hours total)
+- If confirmation (Section 3.3) does not occur within 8 hours, discard the
+  signal entirely
+- If price reverts more than 50% of the extreme move before entry, the
+  opportunity is diminished — discard
+
+3.5 ORDER PLACEMENT
+
+- Order type: LIMIT at best bid (for longs) or best ask (for shorts)
+- Timeout: 30 seconds. Cancel and re-place at current best bid/ask.
+- After 3 failed LIMIT attempts: MARKET order
+- Immediately after fill, place:
+  STOP_MARKET for stop loss
+  TAKE_PROFIT_MARKET for first target
+- Log all entry details with millisecond timestamps
+
+================================================================================
+SECTION 4: EXIT LOGIC
+================================================================================
+
+4.1 MEAN REVERSION TARGET (PRIMARY EXIT)
+
+- Target: Price returns to the 20-period SMA on the 4h timeframe (the center
+  of the Bollinger Bands)
+- This is the "mean" the strategy expects price to revert to
+- For LONG positions: exit when price touches or exceeds the 20 SMA (4h)
+- For SHORT positions: exit when price touches or drops below the 20 SMA (4h)
+
+4.2 PARTIAL TAKE PROFIT SCALING
+
+Tranche 1: Close 40% at 50% of the distance from entry to the 20 SMA
+- Example: Entry at $58,000, 20 SMA at $60,000, distance = $2,000
+  Close 40% at $59,000 (50% reversion)
+
+Tranche 2: Close 30% when price reaches the 20 SMA (full mean reversion)
+
+Tranche 3: Close remaining 30% at the opposite Bollinger Band
+  (or Z-score ±1.0 on the opposite side, whichever comes first)
+  This tranche captures occasional overshoots past the mean
+
+4.3 HARD STOP LOSS
+
+- Placement: 1.0 standard deviation beyond the extreme that triggered entry
+  (i.e., if entry was at lower BB, stop is at lower BB − 1.0σ)
+- In Z-score terms: if entry at Z = −2.0, stop at Z = −3.0
+  (1.0σ additional beyond the entry extreme)
+- Maximum dollar loss per trade: 1.5% of account equity
+- Order type: STOP_MARKET on Binance (server-side)
+- Placed within 500ms of entry fill
+
+4.4 TIME-BASED EXIT
+
+- Maximum holding period: 5 days (120 four-hour candles)
+- This is derived from mean reversion's typical timescale
+- If position has not reached the first take profit (50% reversion) within
+  2.5 days: close 50% at market
+- At 5 days: close entirely regardless of PnL
+
+4.5 REGIME CHANGE EXIT
+
+- If the daily regime classification (Section 3.1) changes from "mean-reverting"
+  to "trending" (Hurst > 0.55 or ADX > 30) while a position is open:
+  Close the position within 2 hours, regardless of current PnL
+  Mean reversion trades in a trending regime are swimming against the tide
+
+4.6 BREAKEVEN STOP
+
+- When unrealized profit reaches 50% of the distance to the 20 SMA (first
+  take profit level), move stop loss to entry price + fees
+- This protects the position from turning negative after partial reversion
+
+================================================================================
+SECTION 5: RISK MANAGEMENT RULES
+================================================================================
+
+5.1 POSITION SIZING & CAPITAL ALLOCATION
+
+- Maximum capital for this strategy: 20% of total account equity
+  (Lower than trend following because mean reversion has higher win rate but
+   smaller average wins — catastrophic trend-captures must be contained)
+- Maximum per trade: 4% of account equity
+- Position sizing based on stop distance:
+  Size = (Equity × 1.0%) / Stop_Distance_Percent
+  (1.0% risk per trade — conservative for counter-trend trades)
+
+5.2 STOP LOSS ARCHITECTURE
+
+Hard stop: 1.0σ beyond entry extreme (approximately Z = −3.0 or +3.0)
+Dollar cap: 1.5% of equity maximum (whichever is tighter)
+Breakeven: At 50% reversion (Tranche 1 level)
+Time stop: 5 days maximum
+
+5.3 DRAWDOWN PROTECTION
+
+Daily: 2% halt
+Weekly: 4% halt
+Monthly: 7% halt
+System-wide: 15% (same)
+
+5.4 EXPOSURE LIMITS
+
+- Maximum concurrent positions: 3 (mean reversion is selective)
+- Maximum single-asset exposure: 6% of equity
+- Net directional exposure: 12% (less constrained because positions are
+  short-lived and counter-trend)
+
+5.5 ANTI-TREND SAFEGUARD
+
+- This is the most important risk rule for mean reversion:
+- If price moves 1.0σ beyond the stop loss level (Z reaches ±4.0), this
+  strongly suggests a structural trend change, not a temporary extreme
+- Emergency exit: close immediately at market, accept the loss
+- Add the instrument to a "trending" blacklist for 7 days (no mean reversion)
+
+5.6 CIRCUIT BREAKERS
+
+Same structure as STRAT-001 Section 5.7, with addition:
+- If 2 mean reversion trades in the same day hit stops, halt the strategy
+  for 24 hours (market is trending, not mean-reverting)
+
+================================================================================
+SECTION 6: POSITION SIZING RULES
+================================================================================
+
+6.1 BASE CALCULATION
+
+Position_Size = (Equity × Risk_Per_Trade) / Stop_Distance_Pct
+
+Where:
+- Risk_Per_Trade = 1.0% of equity (base)
+- Stop_Distance_Pct = (Stop_Price − Entry_Price) / Entry_Price
+  = approximately 1.0σ of the 4h distribution beyond the entry extreme
+
+6.2 SIGNAL STRENGTH ADJUSTMENT
+
+- STRONG signal (all 3 indicators agree): 100% of calculated size
+- MODERATE signal (2 of 3 agree): 75% of calculated size
+- Additional: if Hurst < 0.40 (strong mean reversion): +25% bonus to size
+  (capped at maximum per-trade limit)
+
+6.3 LEVERAGE
+
+- Maximum leverage: 3x
+- Preferred leverage: 2x
+- If ATR/Price > 4% (high vol): reduce to 1x
+
+6.4 COMPOUND GROWTH
+
+- Same as STRAT-001 Section 6.4
+- Equity-based sizing automatically compounds
+
+================================================================================
+SECTION 7: FILTERS & DISQUALIFIERS
+================================================================================
+
+7.1 REGIME FILTER (MOST IMPORTANT)
+- Hurst exponent must be < 0.50 AND ADX < 25
+- Checked daily, overrides ALL signals if not met
+
+7.2 TREND FOLLOWING CONFLICT
+- If STRAT-001 (trend following) has an active position in the SAME instrument
+  in the SAME direction as the trend, do NOT enter a counter-trend mean
+  reversion trade
+- Specifically: if STRAT-001 is LONG BTC and mean reversion detects a SHORT
+  signal on BTC (overbought RSI > 75), REJECT the mean reversion short
+- Mean reversion may trade instruments that STRAT-001 is NOT currently trading
+
+7.3 WHIPSAW PROTECTION
+- Minimum 6 hours between trades on the same instrument
+- After a stop loss, minimum 12 hours before re-entry on that instrument
+
+7.4 EXTREME VOLATILITY FILTER
+- If 4h ATR exceeds 2x its 50-period average, mean reversion signals are
+  SUSPECT — the market is in a volatility expansion that favors trends
+- In this condition: increase entry threshold from 2.0σ to 2.5σ, and reduce
+  position size by 50%
+
+7.5 FEE THRESHOLD
+- Expected profit (distance from entry to 20 SMA) must exceed 3x round-trip
+  fees (0.08% × 3 = 0.24% minimum expected move)
+- If the 20 SMA is too close to the current price, the trade is not viable
+
+7.6 CONSECUTIVE LOSS HANDLING
+- After 3 consecutive losses: reduce size by 25% for 3 trades
+- After 5 consecutive losses: halt strategy, review regime classification logic
+- After halt: require 5 days of paper trading confirmation before resuming
+
+7.7 LIQUIDITY FILTER
+- Same as STRAT-001 Section 7.1 (spread < 0.1%, adequate depth)
+
+================================================================================
+SECTION 8: 24/7 OPERATION HANDLING
+================================================================================
+
+Same architecture as STRAT-001 Section 8, with strategy ID STRAT-004.
+
+Additional:
+- Daily regime recalculation at 00:00 UTC requires fetching 100 days of daily
+  candles per instrument (automatically scheduled, not triggered by signals)
+- Hurst exponent calculation is computationally moderate — must complete within
+  60 seconds per instrument (8 instruments = 8 minutes total budget)
+
+================================================================================
+SECTION 9: PAPER TRADING SPECIFICATIONS
+================================================================================
+
+Same structure as STRAT-001 Section 9, with adjusted go-live criteria:
+
+Go-live requires (60-day minimum):
+- Minimum 40 completed trades
+- Net positive PnL after fees
+- Win rate above 50% (mean reversion should have higher win rate)
+- Profit factor above 1.2 (lower bar than momentum since wins are smaller)
+- Maximum drawdown < 10%
+- Sharpe ratio > 0.7
+- Regime filter successfully prevented trading during trending periods
+  (measured by: no trades entered when subsequent Hurst > 0.55)
+
+================================================================================
+SECTION 10: PERFORMANCE METRICS
+================================================================================
+
+10.1 STANDARD METRICS
+Same as STRAT-001 Section 10.1
+
+10.2 STRATEGY-SPECIFIC METRICS
+
+- Regime Classification Accuracy: percentage of time the Hurst/ADX filter
+  correctly identified mean-reverting vs trending conditions
+- Average Reversion Captured: percentage of the total mean-reversion move
+  (from extreme to mean) that was captured as profit
+- Signal Agreement Rate: how often 2-of-3 vs 3-of-3 indicators trigger
+- Time-to-Reversion: average time from entry to reaching the 20 SMA target
+- Overshoot Capture: how often Tranche 3 (opposite BB) is reached
+- Regime vs Performance: win rate and profit factor stratified by Hurst
+  exponent ranges and ADX ranges
+- Complement Analysis: correlation of daily returns between STRAT-004 and
+  STRAT-001 (should be negative — they should perform well at different times)
+
+================================================================================
+SECTION 11: EDGE CASES & FAILURE MODES
+================================================================================
+
+11.1 TREND RESUMES AFTER APPARENT REVERSION
+- Price reverts 50% (triggers Tranche 1 and breakeven stop) then resumes the
+  trend, stopping out the remaining position at breakeven
+- This is a NORMAL outcome, not a failure. The partial take profit secured gains.
+- Log and track frequency: if this happens > 40% of trades, the entry timing
+  may need adjustment
+
+11.2 EXTREME DOES NOT REVERT (REGIME SHIFT MID-TRADE)
+- The 4h extreme continues extending (Z reaches −3.0, −4.0, −5.0)
+- The hard stop at Z = −3.0 catches this
+- Post-stop: daily regime recalculation will likely reclassify the instrument
+- This is the primary risk of mean reversion — trends disguised as extremes
+
+11.3 BOLLINGER BANDS COMPRESS (LOW VOLATILITY)
+- When bands narrow, the 2.5σ threshold becomes a very small price move
+- The FEE THRESHOLD filter (Section 7.5) prevents entering trades where the
+  expected reversion is too small to cover costs
+- If BB width (as % of price) drops below 2%, skip signals on that instrument
+
+11.4 FALSE REVERSAL CONFIRMATION
+- 15m candle shows reversal, but it's a dead-cat bounce
+- The breakeven stop protects against this after Tranche 1
+- The time stop (5 days) prevents indefinite holding
+- Track false confirmation rate; if > 50%, tighten the confirmation criteria
+
+11.5 ALL INSTRUMENTS CLASSIFIED AS TRENDING
+- If daily regime check classifies ALL instruments as trending (all ADX > 25
+  or all Hurst > 0.5), the strategy has zero eligible instruments
+- This is expected behavior during strong bull/bear phases
+- The strategy sits idle, preserving capital. This is a feature, not a bug.
+- Log idle periods for performance analysis
+
+================================================================================
+SECTION 12: DEPENDENCIES & INTEGRATION POINTS
+================================================================================
+
+Same structure as STRAT-001 Section 12, with strategy ID STRAT-004.
+
+Critical integration with STRAT-001 (Trend Following):
+- The shared risk manager must coordinate between these two strategies
+- They should not BOTH trade the same instrument at the same time (Section 7.2)
+- Their combined performance should be tracked as a "combined systematic"
+  portfolio in the dashboard
+- Ideally, their equity curves should be negatively correlated, providing
+  diversification benefit to the overall system
+
+Rate limit budget: 150 weight/minute normal, 300 weight/minute at 00:00 UTC
+for daily regime recalculation.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

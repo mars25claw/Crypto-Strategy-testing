@@ -1,0 +1,497 @@
+================================================================================
+CROSS-EXCHANGE & TRIANGULAR ARBITRAGE
+ALGORITHMIC TRADING BOT — BUILD INSTRUCTIONS
+================================================================================
+Version: 1.0
+Classification: Proprietary — Quantitative Trading Desk
+Strategy ID: STRAT-007-ARBITRAGE
+================================================================================
+
+TABLE OF CONTENTS
+1.  Strategy Overview
+2.  Required Data Streams
+3.  Entry Logic
+4.  Exit Logic
+5.  Risk Management Rules
+6.  Position Sizing Rules
+7.  Filters & Disqualifiers
+8.  24/7 Operation Handling
+9.  Paper Trading Specifications
+10. Performance Metrics
+11. Edge Cases & Failure Modes
+12. Dependencies & Integration Points
+
+================================================================================
+SECTION 1: STRATEGY OVERVIEW
+================================================================================
+
+1.1 WHAT THIS STRATEGY DOES
+
+This strategy exploits price discrepancies across different Binance trading
+venues and between related trading pairs. It operates in two modes:
+
+Mode A — Cross-Exchange Arbitrage (Spot vs Futures):
+Buy on Binance spot and sell on Binance futures (or vice versa) when a
+price discrepancy exceeds transaction costs. This is intra-exchange arb
+between spot and derivatives markets.
+
+Mode B — Triangular Arbitrage:
+Exploit pricing inconsistencies between three trading pairs on a single
+exchange. Example: BTC/USDT → ETH/BTC → ETH/USDT → USDT. If the cross-rate
+differs from the direct rate, a profit opportunity exists.
+
+1.2 MARKET CONDITIONS TARGETED
+
+- High volatility moments when prices across venues temporarily desynchronize
+- Periods of high demand imbalance (heavy buying on one venue, not the other)
+- During large liquidation events where derivatives prices overshoot spot
+- After major news breaks when information propagates unevenly across pairs
+
+1.3 THEORETICAL EDGE
+
+- Price discrepancies are brief (milliseconds to seconds) but persistent
+  due to crypto market fragmentation
+- Typical opportunities: 0.1-2% per trade on altcoins, much less on majors
+- Triangular opportunities: 0.05-0.5% gross, diminished by triple fees
+- The edge requires SPEED — opportunities are competed away within seconds
+- Realistic after fees: many opportunities yield < 0.05% net, requiring high
+  volume and low fees to generate meaningful returns
+
+1.4 TARGET OPPORTUNITIES
+
+Mode A — Spot-Futures Discrepancy:
+Primary: BTC, ETH, SOL, BNB, XRP, DOGE, ADA
+Monitor spot price vs futures mark price continuously
+Opportunity: When |spot_price − futures_price| / spot_price > threshold
+
+Mode B — Triangular Paths:
+Path 1: USDT → BTC → ETH → USDT
+Path 2: USDT → BTC → SOL → USDT
+Path 3: USDT → ETH → BNB → USDT
+Path 4: USDT → BTC → XRP → USDT
+Path 5-10: Additional triangles involving top 10 assets
+
+Maximum monitored triangles: 10 paths
+Maximum concurrent executions: 2 (to avoid leg-timing conflicts)
+
+================================================================================
+SECTION 2: REQUIRED DATA STREAMS
+================================================================================
+
+2.1 WEBSOCKET STREAMS
+
+For Mode A (Spot-Futures, per asset, max 7 assets):
+- <symbol>@bookTicker (SPOT)    — Real-time best bid/ask on spot
+- <symbol>@bookTicker (FUTURES) — Real-time best bid/ask on futures
+- <symbol>@depth5@100ms (SPOT)  — Top 5 levels for liquidity check
+- <symbol>@depth5@100ms (FUTURES)
+
+For Mode B (Triangular, per triangle path, 3 pairs per path):
+- <pair>@bookTicker for each of the 3 pairs in the triangle
+  (e.g., BTCUSDT, ETHBTC, ETHUSDT)
+
+Total streams: Mode A: 7 × 4 = 28; Mode B: 10 × 3 = 30
+Combined unique streams (with dedup): approximately 40-50
+
+LATENCY IS CRITICAL: This strategy requires the absolute lowest-latency
+data delivery from the WebSocket manager. Message processing must be
+prioritized over all other strategies.
+
+2.2 REST API ENDPOINTS
+
+Order Management:
+- POST /api/v3/order (spot) and POST /fapi/v1/order (futures)
+  Weight: 1 each. CRITICAL PRIORITY.
+- These must bypass the rate limit queue and execute immediately
+
+Account:
+- GET /api/v3/account and GET /fapi/v2/account
+  Weight: 10 and 5. Called every 30 seconds for balance verification.
+
+2.3 USER DATA STREAMS
+Both spot and futures user data streams active simultaneously.
+
+================================================================================
+SECTION 3: ENTRY LOGIC
+================================================================================
+
+3.1 MODE A — SPOT-FUTURES ARBITRAGE DETECTION
+
+Step 1: Continuous Price Comparison
+- For each monitored asset, compare in real-time:
+  Spot_Best_Bid, Spot_Best_Ask (from spot bookTicker)
+  Futures_Best_Bid, Futures_Best_Ask (from futures bookTicker)
+- Update on every bookTicker message (sub-second frequency)
+
+Step 2: Opportunity Calculation
+Opportunity 1 — Buy Spot, Sell Futures (when futures premium is excessive):
+  Gross_Profit_Pct = (Futures_Best_Bid − Spot_Best_Ask) / Spot_Best_Ask × 100
+  Net_Profit_Pct = Gross_Profit_Pct − Spot_Taker_Fee − Futures_Taker_Fee
+  (All arb trades use MARKET/taker execution for speed)
+
+Opportunity 2 — Buy Futures, Sell Spot (when futures discount is excessive):
+  Gross_Profit_Pct = (Spot_Best_Bid − Futures_Best_Ask) / Futures_Best_Ask × 100
+  Net_Profit_Pct = Gross_Profit_Pct − Spot_Taker_Fee − Futures_Taker_Fee
+
+Step 3: Threshold Check
+- Minimum Net_Profit_Pct to execute: 0.05% (after fees)
+- Conservative threshold: 0.10%
+- Default: 0.08%
+- This threshold must be recalibrated weekly based on average fee tier
+
+Step 4: Liquidity Verification
+- Check depth5 on both venues: is there sufficient quantity at the best
+  bid/ask to fill the intended order size?
+- Required available depth: order_size × 1.5 (50% buffer for partial fills)
+- If insufficient depth on either side: SKIP (slippage will eat the profit)
+
+Step 5: Execution (if all conditions met)
+- Both orders placed within 50ms of each other (tighter than other strategies
+  because arb opportunities evaporate instantly)
+- Both orders: MARKET type (speed over price improvement)
+- If one order fills and the other fails: see Section 11.1
+
+3.2 MODE B — TRIANGULAR ARBITRAGE DETECTION
+
+Step 1: Continuous Cross-Rate Calculation
+For triangle USDT → A → B → USDT:
+- Direct rate: Buy B with USDT at B/USDT ask price
+- Cross rate: Buy A with USDT at A/USDT ask, then sell A for B at B/A bid,
+  then sell B for USDT at B/USDT bid
+
+  Implied_Price = (A_USDT_Ask) / (B_A_Bid) vs B_USDT_Bid
+
+Step 2: Profit Calculation
+Starting with 1 USDT:
+  Step A: Buy Asset_A → receive (1 / A_USDT_Ask) units of A
+  Step B: Sell A for B → receive (A_qty × B_A_Bid) units of B
+  Step C: Sell B for USDT → receive (B_qty × B_USDT_Bid) USDT
+
+  Gross_Profit = Final_USDT − 1.0
+  Net_Profit = Gross_Profit − (3 × Taker_Fee × Amount_Per_Leg)
+  (Three trades, each incurring taker fee)
+
+Step 3: Threshold Check
+- Minimum Net_Profit_Pct: 0.05% after 3× taker fees
+- With 0.10% taker per trade × 3 = 0.30% total fees, the gross opportunity
+  must exceed 0.35% (0.30% + 0.05% minimum net)
+- If fee tier is lower (maker taker 0.04%), threshold adjusts accordingly
+
+Step 4: Execution Sequence
+- All THREE orders must execute in rapid sequence
+- Order 1: MARKET (placed immediately on detection)
+- Order 2: MARKET (placed within 100ms of Order 1 fill confirmation)
+- Order 3: MARKET (placed within 100ms of Order 2 fill confirmation)
+- Total execution window target: < 500ms for all three orders
+- Alternatively, if all three can be calculated in advance:
+  Submit all three as quickly as possible, accepting that Order 2 and 3
+  may need quantity adjustment based on actual fills
+
+Step 5: Fill Reconciliation
+- After all three orders fill, calculate actual net profit:
+  Actual_Profit = Final_USDT − Initial_USDT − Total_Fees
+- If actual profit is positive: success, log and continue
+- If actual profit is negative (slippage exceeded expected profit):
+  Log as a loss, analyze which leg had unexpected slippage
+
+================================================================================
+SECTION 4: EXIT LOGIC
+================================================================================
+
+4.1 ARBITRAGE IS SELF-CLOSING
+
+Unlike other strategies, arbitrage trades are IMMEDIATELY closed by design.
+Each trade is a complete round-trip (buy and sell simultaneously for Mode A,
+or three-leg cycle for Mode B). There is no "holding period" in the
+traditional sense.
+
+4.2 STUCK POSITION HANDLING (THE REAL EXIT LOGIC)
+
+If one leg of an arb trade fails and leaves an unhedged position:
+- Time limit: the exposed position must be closed within 60 seconds
+- If within 60 seconds the counter-opportunity appears (the price discrepancy
+  reverses), execute the closing leg to complete the arb at a potentially
+  smaller profit
+- If no counter-opportunity within 30 seconds: close the position at market,
+  accepting any profit or loss
+- NEVER hold an unhedged arb position for more than 60 seconds
+
+4.3 END-OF-DAY RECONCILIATION (00:00 UTC)
+
+- Verify zero net inventory across all arb instruments
+- If any residual position exists from failed arb legs: close at market
+- Calculate daily arb P&L net of all fees
+
+================================================================================
+SECTION 5: RISK MANAGEMENT RULES
+================================================================================
+
+5.1 POSITION SIZING & CAPITAL ALLOCATION
+
+- Maximum capital for this strategy: 15% of total account equity
+- Capital must be PRE-POSITIONED in both spot and futures wallets:
+  Spot wallet: 50% of allocated capital
+  Futures wallet: 50% of allocated capital
+- Mode A and Mode B share the allocation
+
+5.2 MAXIMUM TRADE SIZE
+
+- Per arb trade (Mode A): maximum 2% of total equity per leg
+- Per triangle (Mode B): maximum 1% of total equity per leg
+  (Smaller because three sequential executions have higher failure risk)
+
+5.3 EXPOSURE LIMITS
+
+- Maximum unhedged directional exposure at any time: 2% of equity
+  (Should normally be 0% — unhedged only during execution and failures)
+- If unhedged exposure exceeds 2%: EMERGENCY close at market
+- Maximum concurrent arb executions: 2 (avoid rate limit exhaustion)
+
+5.4 DRAWDOWN PROTECTION
+
+Daily: 1.5% halt (arb should have very low drawdowns)
+Weekly: 2.5%
+Monthly: 4%
+System-wide: 15%
+
+5.5 CIRCUIT BREAKERS
+
+Execution Failure Rate:
+- If more than 3 arb attempts in a row result in only 1 leg filling (the
+  other failing): halt for 30 minutes (likely API or liquidity issue)
+
+Negative Arb Trades:
+- If 5 consecutive arb trades are net negative after fees: halt and review
+  (fee calculations may be wrong, or latency is too high to capture the edge)
+
+Exchange Anomaly:
+- If bookTicker data shows prices that are clearly erroneous (> 5% deviation
+  from recent history without corresponding market moves): DO NOT arb
+  This could be a data feed error, and executing would expose to the correct
+  price when the error resolves
+
+Kill Switch:
+- Cancel all pending orders, close any unhedged positions
+- Must complete within 5 seconds
+
+================================================================================
+SECTION 6: POSITION SIZING RULES
+================================================================================
+
+6.1 PROFIT-MAXIMIZING SIZE
+
+The optimal trade size is the MAXIMUM that can be filled at the quoted prices
+without slipping to the next price level:
+
+Mode A:
+  Trade_Size = min(
+    Spot_Best_Level_Quantity,
+    Futures_Best_Level_Quantity,
+    Max_Per_Trade_USDT / Current_Price,
+    Available_Balance / Current_Price
+  )
+
+Mode B:
+  Trade_Size = min(
+    Quantities available at best price across all 3 legs,
+    Max_Per_Trade_USDT / Current_Price,
+    Available_Balance / 3 / Current_Price  (capital split across 3 legs)
+  )
+
+6.2 MINIMUM VIABLE SIZE
+
+- Each arb trade must generate at least $0.50 net profit after all fees
+  to justify the execution overhead
+- Minimum_Size = $0.50 / Net_Profit_Percentage
+  Example: 0.08% net profit → minimum size = $0.50 / 0.0008 = $625
+
+6.3 LEVERAGE
+
+- Mode A (spot vs futures): No leverage on spot leg. Max 2x on futures leg.
+- Mode B (triangular, spot only): No leverage.
+
+================================================================================
+SECTION 7: FILTERS & DISQUALIFIERS
+================================================================================
+
+7.1 LATENCY FILTER
+- Measure round-trip API latency every 60 seconds (REST order + confirmation)
+- If latency exceeds 200ms: reduce arb activity (opportunities may be stale
+  by the time orders arrive)
+- If latency exceeds 500ms: halt arb completely (high risk of executing on
+  stale prices)
+
+7.2 DEPTH FILTER
+- Both sides of Mode A (or all three legs of Mode B) must have depth ≥ 1.5x
+  intended trade size at the best price level
+- Without this, slippage will destroy the thin arb profit margin
+
+7.3 FEE AWARENESS
+- Recalculate fee thresholds on startup and when fee tier changes
+- If BNB balance is sufficient for fee discount, factor in the reduced rate
+- If BNB balance is insufficient: adjust thresholds to non-discounted rates
+
+7.4 HIGH VOLATILITY CAUTION
+- During extreme volatility (BTC moves > 5% in 15 minutes), arb spreads may
+  appear wide but book depth is thin and fills are unreliable
+- In extreme vol: increase minimum profit threshold by 2x
+
+7.5 MAINTENANCE WINDOW
+- If Binance announces maintenance for either spot or futures: halt arb
+  2 hours before scheduled maintenance
+
+7.6 CONSECUTIVE LOSS HANDLING
+- After 5 net-negative arb trades: halt for 1 hour
+- After 10 in a day: halt for remainder of day
+- After 3 consecutive losing days: halt and require manual investigation
+
+================================================================================
+SECTION 8: 24/7 OPERATION HANDLING
+================================================================================
+
+8.1 STATE PERSISTENCE (Every 5 seconds)
+
+- Capital allocation: spot wallet balance, futures wallet balance
+- Active/pending arb executions: all legs with status
+- Unhedged positions: any residual inventory from failed arbs
+- Opportunity history: last 1000 detected opportunities (taken and skipped)
+  with price data, profit calculations, and execution results
+- Performance counters: trades today, net PnL, win rate, average profit
+
+8.2 STARTUP RECONCILIATION
+
+- Check for any unhedged positions from previous session
+- Close any unhedged positions immediately at market
+- Verify spot and futures wallet balances match expected allocation
+- Calibrate latency by executing a test order cycle (cancel-only)
+
+8.3 WALLET REBALANCING
+
+- If Mode A arb consistently flows capital from one wallet to another (e.g.,
+  buying spot and selling futures accumulates spot assets), periodic
+  rebalancing is needed:
+  Every 4 hours, check wallet balance ratio
+  If ratio deviates > 10% from 50/50: execute internal transfer
+- For triangular arb, the cycle returns to the starting currency, so no
+  rebalancing should be needed in theory. Track any drift.
+
+8.4 HEARTBEAT, MEMORY, LOGS
+Same as previous strategies with strategy ID STRAT-007.
+Additional: Opportunity detection log (every detected opportunity, whether
+taken or skipped, with reason and pricing data).
+
+================================================================================
+SECTION 9: PAPER TRADING SPECIFICATIONS
+================================================================================
+
+9.1 FILL SIMULATION
+
+- Mode A: Simulate fills at best bid/ask PLUS slippage based on order size
+  vs available depth. Walk the order book.
+- Mode B: Simulate sequential fills with 100-200ms delays between legs.
+  Each subsequent leg uses the CURRENT price (which may have moved since
+  detection).
+
+9.2 LATENCY SIMULATION
+
+- Add 50-200ms random latency to each simulated order (models real API latency)
+- The opportunity pricing may shift during this latency window
+
+9.3 GO-LIVE CRITERIA (45-day minimum)
+
+- Net positive PnL after all simulated fees
+- Win rate > 80% (arb should have very high win rate)
+- Average profit per trade > 0.03% net
+- No unhedged position held > 60 seconds (failure handling works)
+- Latency measurements show consistent sub-200ms round-trip
+
+================================================================================
+SECTION 10: PERFORMANCE METRICS
+================================================================================
+
+10.1 STANDARD METRICS — Same as STRAT-001
+
+10.2 STRATEGY-SPECIFIC METRICS
+
+- Opportunities Detected per Hour: raw count of detected arb opportunities
+- Opportunities Taken vs Skipped: ratio and reasons for skipping
+- Execution Success Rate: percentage of arb attempts where all legs fill
+- Average Profit Per Trade: net of fees, in USDT and percentage
+- Latency Breakdown: detection-to-order, order-to-fill, total cycle time
+- Slippage Analysis: expected vs actual fill prices per leg
+- Wallet Balance Drift: how much capital migrates between wallets over time
+- Stale Opportunity Rate: percentage of taken opportunities that were no
+  longer profitable by the time of execution (latency cost)
+- Mode A vs Mode B Attribution: PnL breakdown by arbitrage type
+- Time of Day Analysis: when are opportunities most frequent?
+- Profit Per Dollar of Volume: efficiency measure (thin margins × high volume)
+
+================================================================================
+SECTION 11: EDGE CASES & FAILURE MODES
+================================================================================
+
+11.1 SINGLE LEG FILL (MODE A)
+- Scenario: Spot buy fills, futures sell fails
+- The bot now has an unhedged long spot position
+- Response: Retry futures sell 3 times (200ms apart)
+- If still failing: place futures sell as aggressive LIMIT (best bid - 0.01%)
+- If still failing after 30 seconds: sell spot at market (unwinding)
+- Maximum unhedged exposure time: 60 seconds (HARD LIMIT)
+
+11.2 PARTIAL TRIANGLE (MODE B)
+- Scenario: Legs 1 and 2 fill, Leg 3 fails
+- The bot holds an intermediate asset that must be closed out
+- Response: Retry Leg 3 three times (200ms apart)
+- If failing: close the position by reversing Legs 1 and 2 (sell back through
+  the original path) — this will likely result in a small loss
+- NEVER hold incomplete triangle positions
+
+11.3 ERRONEOUS PRICE DATA
+- If a bookTicker reports a price that is > 2% from the last known price
+  without corresponding aggTrade volume: suspect data error
+- Do NOT execute arb based on the anomalous price
+- Wait for 3 consecutive bookTicker updates confirming the new price level
+
+11.4 RACE CONDITION WITH OTHER STRATEGIES
+- If STRAT-001 places a MARKET buy on BTC at the same instant this strategy
+  tries to arb-sell BTC, they may interfere
+- The shared risk manager must coordinate: arb trades are ATOMIC and should
+  not be split or delayed by other strategy orders
+
+11.5 FEE TIER CHANGE MID-SESSION
+- If a large fill changes the account's 30-day volume (affecting fee tier):
+  immediately recalculate all thresholds
+- If fees increased: wider threshold required, some opportunities become invalid
+
+================================================================================
+SECTION 12: DEPENDENCIES & INTEGRATION POINTS
+================================================================================
+
+12.1 UNIFIED WEBSOCKET MANAGER
+Strategy ID: STRAT-007
+HIGHEST PRIORITY for message delivery (tied with STRAT-006)
+Requires both spot and futures WebSocket connections
+Message delivery latency target: < 10ms from receipt to strategy handler
+
+12.2 CENTRALIZED RATE LIMIT MANAGER
+Budget: 200 weight/minute normal
+Arb orders get CRITICAL priority (same as stop losses)
+Rate limit is the BINDING constraint on arb frequency — cannot execute
+more than 10 arb cycles per second (10 orders/sec limit)
+During periods of frequent opportunities, the rate limit will be the
+bottleneck, not the strategy logic
+
+12.3 SHARED RISK MANAGER
+Reports: current unhedged exposure (should be near zero)
+Cross-strategy: if another strategy is about to place a large order in the
+same instrument, the risk manager may need to delay it to avoid interfering
+with an in-progress arb execution
+
+12.4 DATABASE, DASHBOARD, ALERTING
+Same as previous strategies.
+Dashboard: real-time opportunity scanner display, execution success rate
+gauge, latency monitor, wallet balance tracker
+
+================================================================================
+END OF DOCUMENT
+================================================================================

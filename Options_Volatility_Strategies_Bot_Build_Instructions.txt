@@ -1,0 +1,546 @@
+================================================================================
+OPTIONS & VOLATILITY STRATEGIES
+ALGORITHMIC TRADING BOT — BUILD INSTRUCTIONS
+================================================================================
+Version: 1.0
+Classification: Proprietary — Quantitative Trading Desk
+Strategy ID: STRAT-008-OPTIONS-VOL
+================================================================================
+
+TABLE OF CONTENTS
+1.  Strategy Overview
+2.  Required Data Streams
+3.  Entry Logic
+4.  Exit Logic
+5.  Risk Management Rules
+6.  Position Sizing Rules
+7.  Filters & Disqualifiers
+8.  24/7 Operation Handling
+9.  Paper Trading Specifications
+10. Performance Metrics
+11. Edge Cases & Failure Modes
+12. Dependencies & Integration Points
+
+================================================================================
+SECTION 1: STRATEGY OVERVIEW
+================================================================================
+
+1.1 WHAT THIS STRATEGY DOES
+
+This strategy harvests the persistent gap between implied volatility (IV) and
+realized volatility (RV) in cryptocurrency options markets. Crypto IV
+consistently overprices actual volatility (negative variance risk premium),
+creating a structural edge for volatility sellers. The strategy primarily
+sells options (covered calls, cash-secured puts, strangles) while maintaining
+delta-neutral exposure through dynamic hedging.
+
+NOTE: Binance does not offer a native options market with the same depth as
+Deribit. This strategy is designed to operate on Binance via SYNTHETIC options
+positions constructed from perpetual futures and spot, OR to interface with
+Deribit as a secondary exchange if available. The instructions below specify
+the logic for both approaches. If only Binance is available, the strategy
+operates in Synthetic Mode (covered calls and volatility estimation only).
+
+1.2 MARKET CONDITIONS TARGETED
+
+- High implied volatility environments (IV > 60% annualized for BTC)
+- Periods where IV significantly exceeds recent realized volatility
+  (IV/RV ratio > 1.3)
+- Post-event IV crush: after anticipated events (FOMC, CPI, halvings), IV
+  drops sharply — selling options before the event captures this decay
+- Range-bound markets where theta decay works in the seller's favor
+
+1.3 THEORETICAL EDGE
+
+- Crypto's negative variance risk premium is academically documented
+- IV consistently exceeds RV by 10-30% on average
+- BTC front-end ATM implied volatility traded between 40% and 95%+ in 2025
+- Professional funds using volatility strategies achieve Sharpe ratios > 2.0
+- The edge is SELLING overpriced insurance (options premium) to the market
+
+1.4 SUB-STRATEGIES
+
+Sub-Strategy A: Covered Call Writing
+- Hold long spot BTC/ETH, sell OTM call options against the position
+- Generates premium income with capped upside
+- Synthetic implementation on Binance: hold spot + sell futures at higher
+  price (simulates call selling through price-conditional futures orders)
+
+Sub-Strategy B: Cash-Secured Put Selling
+- Sell OTM put options, holding USDT as collateral
+- Collects premium; if exercised, buys the asset at a discount
+- Synthetic on Binance: set limit buy orders at target levels with premium
+  calculation embedded in the position sizing
+
+Sub-Strategy C: Delta-Neutral Volatility Selling (Deribit Required)
+- Sell ATM straddles or OTM strangles on Deribit
+- Delta-hedge using Binance perpetual futures
+- Profit from theta decay when realized vol < implied vol
+
+Sub-Strategy D: Volatility Arbitrage (Deribit Required)
+- Compare IV across strikes and expirations for mispricing
+- Sell overpriced IV, buy underpriced IV (vol surface arbitrage)
+- Delta-hedge the net position
+
+1.5 TARGET INSTRUMENTS
+
+- BTC and ETH ONLY (highest options liquidity)
+- Options: BTC-USD and ETH-USD options on Deribit (if available)
+- Hedging: BTCUSDT and ETHUSDT perpetual futures on Binance
+- Spot: BTC and ETH on Binance (for covered call collateral)
+
+================================================================================
+SECTION 2: REQUIRED DATA STREAMS
+================================================================================
+
+2.1 BINANCE WEBSOCKET STREAMS
+
+- BTCUSDT@markPrice@1s — Real-time price for delta hedging
+- ETHUSDT@markPrice@1s — Same
+- BTCUSDT@kline_1m — 1-minute candles for realized vol calculation
+- ETHUSDT@kline_1m — Same
+- BTCUSDT@kline_1h — Hourly candles for regime detection
+- ETHUSDT@kline_1h — Same
+- BTCUSDT@kline_1d — Daily candles for IV/RV comparison
+- ETHUSDT@kline_1d — Same
+- BTCUSDT@bookTicker — Execution pricing for hedging
+- ETHUSDT@bookTicker — Same
+
+Total Binance streams: 10
+
+2.2 DERIBIT DATA (IF AVAILABLE — via separate connection or REST polling)
+
+If Deribit integration is implemented:
+- Options chain data: all active strikes and expirations for BTC and ETH
+- Order book for target strikes
+- Index price and mark price for each option
+- Greeks (delta, gamma, theta, vega) per option from Deribit
+- IV surface data
+
+Polling frequency: every 5 seconds for options chain, every 1 second for
+order books of actively traded strikes
+
+2.3 REST API ENDPOINTS (BINANCE)
+
+Same account and order endpoints as previous strategies.
+Additional:
+- GET /fapi/v1/klines — Historical 1m klines for realized vol calculation
+  On startup: 1440 1-minute candles (24 hours) for warm-up
+
+================================================================================
+SECTION 3: ENTRY LOGIC
+================================================================================
+
+3.1 VOLATILITY REGIME ASSESSMENT (RUN EVERY HOUR)
+
+Step 1: Calculate Realized Volatility
+- Use 1-minute close-to-close returns over rolling windows:
+  RV_1d = stdev(1-min returns) × sqrt(1440) × 100  (annualized, 1-day window)
+  RV_7d = stdev(1-min returns) × sqrt(1440) × 100  (7-day window)
+  RV_30d = stdev(1-min returns) × sqrt(1440) × 100 (30-day window)
+
+Step 2: Estimate Implied Volatility
+If Deribit available: use ATM IV directly from options chain
+If Deribit NOT available (Synthetic Mode): estimate IV from the Binance
+futures basis and funding rate:
+  IV_estimate = sqrt(2π) × |Futures_Premium| / sqrt(T) × adjustment_factor
+  Where T = time to next funding in years, adjustment_factor calibrated
+  historically to match Deribit IV (approximately 1.5-2.0)
+  This is a ROUGH estimate — flag in all logs as "estimated IV"
+
+Step 3: IV/RV Ratio
+- IV_RV_Ratio = IV / RV_7d
+- If IV_RV_Ratio > 1.3: Volatility is overpriced — FAVORABLE for selling
+- If IV_RV_Ratio > 1.5: Strongly overpriced — increase position sizes
+- If IV_RV_Ratio < 1.1: Volatility is fairly priced — REDUCE activity
+- If IV_RV_Ratio < 1.0: Volatility is underpriced — DO NOT sell vol
+
+3.2 SUB-STRATEGY A: COVERED CALL ENTRY
+
+Conditions:
+- Hold a spot BTC/ETH position (or open one at market)
+- IV_RV_Ratio > 1.2
+- Daily trend is neutral to slightly bullish (EMA 20 > EMA 50 on daily,
+  but price not more than 1 daily ATR above 20 EMA — avoiding strong trends
+  where upside capture is more valuable than premium)
+
+Execution (Synthetic on Binance):
+- Calculate the "strike price" equivalent: Current_Price × (1 + target_OTM%)
+  Default target_OTM: 5% above current price
+  Adjustment: if IV is high (> 80%), use 8% OTM (collect more premium from
+  a wider strike); if IV is moderate (50-80%), use 5% OTM
+- Calculate "premium" equivalent: using Black-Scholes approximation with
+  estimated IV, time to expiration (default: 7 days), and the strike
+  Premium ≈ Price × IV × sqrt(T) × N'(d1) (simplified ATM approximation,
+  adjust for OTM using full BS formula)
+- Place a LIMIT SELL order on futures at the strike price with:
+  Quantity = spot holding quantity
+  Type: TAKE_PROFIT_MARKET (triggers when price reaches strike)
+  This simulates the call being exercised — spot is effectively "called away"
+- The "premium" is tracked as theoretical income from the strategy
+
+Expiration simulation:
+- If price does not reach the strike within the "expiration" window (7 days):
+  Cancel the sell order — premium is "kept" (add to theoretical PnL)
+  Set up a new covered call for the next period
+- If price reaches the strike: the sell order fills, spot is sold
+  Net result: profit = (Strike − Entry) + Premium (theoretical)
+  Re-purchase spot if still bullish, or wait for a pullback
+
+3.3 SUB-STRATEGY B: CASH-SECURED PUT ENTRY
+
+Conditions:
+- Holding USDT (not deployed in other strategies)
+- IV_RV_Ratio > 1.2
+- Asset is in an uptrend or neutral (not in a crash — selling puts into a
+  crash is extremely risky)
+- RSI(14) daily > 40 (not oversold — put selling into weakness is dangerous)
+
+Execution (Synthetic on Binance):
+- Calculate strike: Current_Price × (1 − target_OTM%)
+  Default target_OTM: 5% below current price
+- Calculate premium: Black-Scholes put premium estimate
+- Place a LIMIT BUY order at the strike price:
+  Quantity = Cash_Available / Strike_Price
+  This simulates put exercise — if price drops to strike, asset is purchased
+- Reserve USDT = Strike × Quantity (this is the "cash-secured" part)
+
+Expiration simulation:
+- If price does not drop to strike within window: cancel buy order, keep
+  theoretical premium
+- If price drops and buy fills: position acquired at effective discount
+  (Strike − Premium). Manage the acquired position according to STRAT-001
+  or STRAT-004 rules.
+
+3.4 SUB-STRATEGY C: DELTA-NEUTRAL STRADDLE/STRANGLE (DERIBIT REQUIRED)
+
+Conditions:
+- IV_RV_Ratio > 1.4 (strong premium to capture)
+- No major events within the option expiration window
+- Sufficient Deribit account balance
+
+Execution:
+- Sell ATM straddle (sell 1 ATM call + sell 1 ATM put) on Deribit
+  OR sell OTM strangle (sell OTM call + sell OTM put) for wider breakevens
+- Calculate initial delta of the combined position
+- Hedge delta on Binance perpetual futures:
+  If delta is positive (long bias): short futures
+  If delta is negative (short bias): long futures
+  Hedge ratio: position_delta × notional = futures hedge quantity
+
+Delta Rebalancing:
+- Monitor delta continuously via Deribit Greeks stream
+- Rebalance when delta exceeds ±0.10 per lot sold
+- Rebalance by adjusting Binance futures position
+- Maximum rebalances per day: 20 (fee-constrained)
+- Each rebalance should bring delta within ±0.03
+
+3.5 ENTRY TIMING
+
+For all sub-strategies:
+- Prefer entering when IV is spiking (before events, during fear)
+- The 30 minutes BEFORE a known event is often the IV peak — ideal entry
+  for selling (IV will crush after the event regardless of direction)
+- Do NOT enter during the first 30 minutes after market-moving news (let
+  IV and prices stabilize)
+
+================================================================================
+SECTION 4: EXIT LOGIC
+================================================================================
+
+4.1 COVERED CALL EXIT
+- Strike reached (call "exercised"): spot sold, profit + premium captured
+- Expiration (7 days): cancel sell order, keep premium, set up new cycle
+- Early exit: if underlying drops > 1 daily ATR, consider closing the
+  spot position to protect downside (the short call was providing partial
+  hedge via premium, but may not be enough in a crash)
+- If IV drops below RV_7d while holding covered call: close early (IV crush
+  captured, remaining time value is minimal)
+
+4.2 CASH-SECURED PUT EXIT
+- Strike reached (put "exercised"): buy fills, manage as new position
+- Expiration: cancel buy order, keep premium, set up new cycle
+- Early exit: if underlying crashes > 2 daily ATR and approaching strike,
+  consider cancelling the buy order to avoid being forced into a rapidly
+  falling asset. Accept the missed "premium" to avoid a larger loss.
+
+4.3 DELTA-NEUTRAL EXIT (DERIBIT)
+- Time-based: Close 50% of the position when 50% of time to expiration has
+  passed (capture most theta decay, reduce gamma risk near expiry)
+- Profit target: Close when 60% of maximum theoretical profit (total premium
+  collected) is realized
+- Stop loss: Close if unrealized loss exceeds 100% of premium collected
+  (the sold options have doubled in value — vol has moved against you)
+- Delta hedge unwind: when options are closed, immediately close the Binance
+  futures hedge
+
+4.4 VOLATILITY EXIT TRIGGER
+- If RV exceeds the IV at which options were sold (realized vol > implied vol
+  at entry), the trade is LOSING its edge. Close within 4 hours.
+- Monitor this continuously: RV_rolling > IV_at_entry → exit signal
+
+================================================================================
+SECTION 5: RISK MANAGEMENT RULES
+================================================================================
+
+5.1 POSITION SIZING & CAPITAL ALLOCATION
+
+- Maximum capital for this strategy: 25% of total equity
+- Sub-strategy allocation:
+  Covered calls: up to 15% (limited by spot holdings)
+  Cash-secured puts: up to 10%
+  Delta-neutral: up to 15% (Deribit collateral + Binance hedge margin)
+  Total may exceed 25% due to overlap (covered call uses spot that could
+  be collateral for puts) — the 25% limit applies to MAX RISK CAPITAL
+
+5.2 MAXIMUM LOSS PER TRADE
+- Covered call: max loss = spot depreciation − premium (effectively unlimited
+  downside on spot). Hard stop on spot: 10% below entry.
+- Cash-secured put: max loss = strike price × quantity − premium (the full
+  purchase value if asset goes to zero). Hard stop: cancel buy order if
+  underlying drops > 15% from current price.
+- Delta-neutral: max loss = 2× premium collected. Close at this level.
+
+5.3 GREEK LIMITS (DERIBIT MODE)
+
+- Maximum net delta: ±0.15 per $10,000 notional (hedge when exceeded)
+- Maximum gamma: −0.005 per dollar of premium sold (avoid excessive near-term
+  expiration risk)
+- Maximum vega: −$500 per percentage point of IV (limit sensitivity to vol)
+- Maximum theta: positive and uncapped (theta is income)
+- Monitor Greeks continuously; breach of ANY limit triggers rebalance or exit
+
+5.4 DRAWDOWN PROTECTION
+
+Daily: 2% halt
+Weekly: 4%
+Monthly: 7%
+System-wide: 15%
+
+5.5 EVENT RISK MANAGEMENT
+
+- If a major event is within 24 hours AND the strategy has open vol-selling
+  positions: tighten delta hedges to ±0.05 (not ±0.10)
+- If event is within 2 hours: close 50% of vol-selling positions (event
+  gamma risk is extreme for vol sellers near expiry)
+- Do NOT sell new volatility within 2 hours before major scheduled events
+
+5.6 CIRCUIT BREAKERS
+
+IV Spike: If IV jumps > 20 percentage points in 4 hours (e.g., from 60% to
+80%), close all vol-selling positions immediately. This suggests a volatility
+regime change that invalidates the short-vol thesis.
+
+Flash Crash: If underlying drops > 8% in 1 hour, close all positions.
+Delta hedges may not keep up with gamma during crashes.
+
+Kill Switch: Close all Binance positions (spot, futures) and Deribit options.
+
+================================================================================
+SECTION 6: POSITION SIZING RULES
+================================================================================
+
+6.1 COVERED CALL SIZING
+- Sell calls against 100% of spot holding (1:1 ratio)
+- Do NOT sell more calls than spot held (naked calls = unlimited risk)
+
+6.2 CASH-SECURED PUT SIZING
+- Put obligation = Strike × Quantity
+- Must have ≥ 100% of obligation in USDT (fully cash-secured)
+- Never sell puts on margin (unlimited downside)
+
+6.3 DELTA-NEUTRAL SIZING
+- Premium collected should not exceed 3% of strategy equity per trade
+- Maximum total premium at risk: 8% of strategy equity across all open trades
+- Delta hedge size determined by option Greeks, not by capital rules
+
+6.4 LEVERAGE
+- Covered calls: no leverage (spot-backed)
+- Cash-secured puts: no leverage (USDT-backed)
+- Delta hedging on Binance: max 3x leverage on futures leg
+- Delta-neutral Deribit: use Deribit's margin rules (typically 10-20x for
+  option sellers with hedges)
+
+================================================================================
+SECTION 7: FILTERS & DISQUALIFIERS
+================================================================================
+
+7.1 IV/RV RATIO FILTER
+- Must exceed 1.2 before any vol-selling activity
+- If below 1.0, no vol selling under any circumstances
+
+7.2 TREND FILTER FOR COVERED CALLS
+- Only write covered calls if trend is neutral or mildly bullish
+- In strong uptrends (ADX > 30 with bullish direction), do NOT write calls
+  (opportunity cost of capped upside is too high)
+
+7.3 CRASH FILTER FOR PUT SELLING
+- Do not sell puts if underlying has dropped > 10% in 7 days
+- Do not sell puts if RSI(14) daily < 30 (oversold crash conditions)
+
+7.4 EXPIRATION FILTER
+- Do NOT sell options with less than 3 days to expiration (gamma risk too high)
+- Do NOT sell options with more than 30 days to expiration (theta decay too
+  slow, capital tied up)
+- Sweet spot: 7-14 days to expiration
+
+7.5 LIQUIDITY FILTER (DERIBIT)
+- Bid-ask spread on target options must be < 5% of option mid-price
+- Open interest > 100 contracts for the target strike
+
+7.6 CONSECUTIVE LOSS HANDLING
+- After 3 consecutive losing vol-selling cycles: halt for 14 days
+  (Extended halt because vol regime changes can persist for weeks)
+- Review IV/RV calculation methodology before resuming
+
+================================================================================
+SECTION 8: 24/7 OPERATION HANDLING
+================================================================================
+
+8.1 STATE PERSISTENCE (Every 5 seconds)
+
+- All open positions: spot, futures hedges, option positions (if Deribit)
+- Current Greeks: delta, gamma, theta, vega per position and aggregate
+- IV and RV calculations: current values and 24h history
+- Covered call/put simulation state: strike, premium, expiration timestamp,
+  current theoretical value
+- Premium income tracking: cumulative premiums collected
+
+8.2 STARTUP RECONCILIATION
+
+Same as previous strategies plus:
+- If Deribit positions exist: fetch current Greeks and recalculate hedges
+- Verify Binance hedge positions match required delta hedge
+- If options expired during downtime: mark as expired, calculate PnL
+
+8.3 ROLLING CYCLES
+
+- Automated expiration handling at the end of each option cycle:
+  1. Calculate cycle PnL (premium collected − hedge costs − any exercise loss)
+  2. Evaluate whether to immediately enter a new cycle or wait
+  3. If IV_RV_Ratio still favorable: enter new cycle within 1 hour
+  4. If conditions changed: wait for next favorable setup
+
+8.4 HEARTBEAT, MEMORY, LOGS
+Same as previous strategies with strategy ID STRAT-008.
+
+================================================================================
+SECTION 9: PAPER TRADING SPECIFICATIONS
+================================================================================
+
+9.1 OPTIONS PRICING SIMULATION
+
+- Use Black-Scholes model for European option pricing:
+  d1 = [ln(S/K) + (r + σ²/2)T] / (σ√T)
+  d2 = d1 − σ√T
+  Call = S×N(d1) − K×e^(−rT)×N(d2)
+  Put = K×e^(−rT)×N(−d2) − S×N(−d1)
+- Use actual RV for σ in simulation (more conservative than using IV)
+- Risk-free rate r = 5% annualized (configurable)
+
+9.2 DELTA HEDGE SIMULATION
+
+- Simulate delta hedging costs: every rebalance incurs taker fees on Binance
+- Track cumulative hedge PnL separately from option premium income
+
+9.3 GO-LIVE CRITERIA (90-day minimum — longer due to strategy complexity)
+
+- Net positive PnL after all simulated fees and hedge costs
+- Profit factor > 1.3
+- Maximum drawdown < 5%
+- IV/RV regime detection correctly avoided < 1.0 ratio periods
+- Delta stayed within limits > 90% of the time
+- Covered call premium income exceeded hedge costs by > 2x
+
+================================================================================
+SECTION 10: PERFORMANCE METRICS
+================================================================================
+
+10.1 STANDARD METRICS — Same as STRAT-001
+
+10.2 STRATEGY-SPECIFIC METRICS
+
+- Annualized Premium Yield: total premium collected / average capital deployed
+  × annualization factor
+- IV/RV Spread at Entry: average IV − RV at the time of vol selling entries
+- Theta Decay Capture Rate: actual profit as % of initial theta expectation
+- Delta Hedge Cost: total cost of hedging as % of premium income
+- Net Yield After Hedging: premium − hedge costs − fees
+- Greek Limit Breaches: number of times delta/gamma/vega limits were exceeded
+- Covered Call vs Naked Premium Comparison: attribution of returns
+- Exercise Rate: percentage of sold options that would have been exercised
+- Volatility Forecasting Accuracy: how close was RV to IV at entry?
+- Cycle-Level Attribution: PnL per option cycle (entry to expiration)
+
+================================================================================
+SECTION 11: EDGE CASES & FAILURE MODES
+================================================================================
+
+11.1 SUDDEN IV EXPANSION (VOL SQUEEZE)
+- If IV spikes 30%+ while holding short vol positions, unrealized losses
+  mount rapidly. This is the primary risk.
+- Circuit breaker at 20% IV jump handles this (Section 5.6)
+- Post-event: wait for IV to stabilize (typically 24-48 hours) before re-entering
+
+11.2 GAP THROUGH COVERED CALL STRIKE
+- Price gaps up through the call strike: spot is sold, upside missed
+- This is an expected outcome, not a failure — premium was collected
+- Re-establish spot position if desired, set up next cycle
+
+11.3 ASSIGNMENT ON PUT (DERIBIT) DURING CRASH
+- If price crashes below put strike: the put is exercised, asset is purchased
+  at the strike price minus premium
+- If the crash continues, the acquired asset loses further value
+- Hard stop at 15% below strike price limits the damage
+
+11.4 DELTA HEDGE LAG
+- During very fast moves, delta hedging on Binance may lag option delta changes
+- This creates temporary unhedged exposure
+- Mitigated by: frequent rebalancing (when vol is high, rebalance more often),
+  using wider delta tolerance bands, and avoiding gamma-heavy positions
+  (near-expiry ATM options)
+
+11.5 DERIBIT CONNECTIVITY LOSS
+- If Deribit connection is lost while Binance hedge is active:
+  The Binance hedge position is now unmanaged (delta may drift)
+  Close Binance hedge to zero if Deribit is unreachable for > 5 minutes
+  This converts the position from "hedged vol sale" to "unhedged vol sale"
+  (much riskier) — accept the risk or close Deribit positions ASAP
+
+================================================================================
+SECTION 12: DEPENDENCIES & INTEGRATION POINTS
+================================================================================
+
+12.1 UNIFIED WEBSOCKET MANAGER
+Strategy ID: STRAT-008
+Binance streams only: 10 streams (modest)
+Deribit connection (if available) is managed SEPARATELY from the unified
+Binance WebSocket manager — it is a strategy-specific dependency
+
+12.2 CENTRALIZED RATE LIMIT MANAGER
+Budget: 100 weight/minute (Binance hedging is infrequent)
+Hedge orders get HIGH priority (not CRITICAL like stops, but above NORMAL)
+
+12.3 SHARED RISK MANAGER
+Reports: net delta exposure (including covered call spot + futures hedge),
+total notional at risk, current Greek exposures
+Cross-strategy: covered call spot holdings should be recognized as collateral
+by the risk manager, not double-counted with other strategies' spot exposure
+
+12.4 EXTERNAL DEPENDENCY: DERIBIT
+- Deribit integration is OPTIONAL — the strategy operates in Synthetic Mode
+  on Binance alone (reduced functionality)
+- If Deribit is added: separate API credentials, rate limits, and connection
+  management required
+- Deribit has its own rate limits (separate from Binance)
+- Cross-exchange risk: positions on two exchanges means capital is split and
+  cross-margin is not possible
+
+12.5 COMPUTATIONAL REQUIREMENTS
+- Black-Scholes calculation and Greeks computation required
+- Volatility surface interpolation (if using Deribit) requires numerical methods
+- These calculations are lightweight (< 100ms per option) but must be accurate
+
+================================================================================
+END OF DOCUMENT
+================================================================================

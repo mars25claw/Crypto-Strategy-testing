@@ -1,0 +1,919 @@
+================================================================================
+TREND FOLLOWING & MOMENTUM CAPTURE
+ALGORITHMIC TRADING BOT — BUILD INSTRUCTIONS
+================================================================================
+Version: 1.0
+Classification: Proprietary — Quantitative Trading Desk
+Strategy ID: STRAT-001-TREND-MOMENTUM
+================================================================================
+
+TABLE OF CONTENTS
+1.  Strategy Overview
+2.  Required Data Streams
+3.  Entry Logic
+4.  Exit Logic
+5.  Risk Management Rules
+6.  Position Sizing Rules
+7.  Filters & Disqualifiers
+8.  24/7 Operation Handling
+9.  Paper Trading Specifications
+10. Performance Metrics
+11. Edge Cases & Failure Modes
+12. Dependencies & Integration Points
+
+================================================================================
+SECTION 1: STRATEGY OVERVIEW
+================================================================================
+
+1.1 WHAT THIS STRATEGY DOES
+
+This strategy identifies and exploits persistent directional price moves in
+cryptocurrency markets. It enters positions in the direction of established
+trends and rides them until momentum exhausts. The strategy operates on the
+principle that crypto assets exhibit strong serial correlation due to retail
+herding, information cascades, and the absence of fundamental valuation anchors
+that constrain equities.
+
+1.2 MARKET CONDITIONS TARGETED
+
+- Trending markets with sustained directional moves lasting days to weeks
+- Breakout scenarios where price escapes established ranges
+- Momentum surges driven by institutional flows, ETF inflows, or macro catalysts
+- Markets with ADX readings above 25 indicating directional strength
+
+1.3 THEORETICAL EDGE
+
+- Crypto momentum is academically documented as statistically significant
+- Time-series momentum on Bitcoin has produced average gains of 5% per trade
+  across 127 trades in backtesting
+- The strategy profits from behavioral biases: anchoring, herding, delayed
+  information processing by retail participants
+- Volatility-adjusted position sizing and trailing stops capture asymmetric
+  upside while limiting drawdowns to 20-35% vs 82% for unmanaged buy-and-hold
+
+1.4 TARGET INSTRUMENTS
+
+Primary: BTC/USDT, ETH/USDT perpetual futures on Binance
+Secondary: SOL/USDT, BNB/USDT, XRP/USDT, ADA/USDT, AVAX/USDT, DOGE/USDT,
+LINK/USDT, DOT/USDT perpetual futures
+Universe cap: Maximum 10 instruments simultaneously
+
+1.5 TIMEFRAMES
+
+Primary signal generation: 4-hour candles (kline_4h)
+Trend confirmation: Daily candles (kline_1d)
+Entry timing refinement: 15-minute candles (kline_15m)
+Momentum micro-confirmation: 1-minute candles (kline_1m) for execution timing
+
+================================================================================
+SECTION 2: REQUIRED DATA STREAMS
+================================================================================
+
+2.1 WEBSOCKET STREAMS (via Unified WebSocket Manager)
+
+Subscribe to the following streams through the shared WebSocket connection
+manager. Each stream subscription request must include the strategy identifier
+STRAT-001 for message routing purposes.
+
+Kline (Candlestick) Streams:
+- <symbol>@kline_1m    — For each active instrument (execution timing)
+- <symbol>@kline_15m   — For each active instrument (entry refinement)
+- <symbol>@kline_4h    — For each active instrument (primary signal)
+- <symbol>@kline_1d    — For each active instrument (trend confirmation)
+
+Order Book Streams:
+- <symbol>@depth20@100ms — Top 20 levels, 100ms updates (liquidity assessment)
+
+Trade Streams:
+- <symbol>@aggTrade — Aggregated trades (volume analysis, large order detection)
+
+Mark Price Streams:
+- <symbol>@markPrice@1s — Mark price every second (PnL tracking, liquidation
+  distance monitoring)
+
+Book Ticker Streams:
+- <symbol>@bookTicker — Best bid/ask real-time (spread monitoring, execution)
+
+Forced Liquidation Streams:
+- <symbol>@forceOrder — Liquidation events (cascade detection)
+
+Total stream count per instrument: 8 streams
+Maximum instruments: 10
+Maximum total streams: 80 (well within Binance 1024 limit per connection)
+
+2.2 REST API ENDPOINTS (via Centralized Rate Limit Manager)
+
+The following REST endpoints are required. All requests must be routed through
+the centralized rate limit manager with the strategy identifier for budget
+tracking.
+
+Market Data (Public):
+- GET /fapi/v1/klines — Historical kline data for indicator warm-up on startup
+  Weight: 5 per request. Required on startup for each instrument and timeframe.
+  Warm-up requirement: 200 candles per timeframe per instrument.
+  Total startup cost: 10 instruments x 4 timeframes x 5 weight = 200 weight
+
+- GET /fapi/v1/ticker/24hr — 24-hour price change statistics
+  Weight: 40 for all symbols. Called once per hour for universe screening.
+
+- GET /fapi/v1/depth — Order book snapshot (fallback if WebSocket depth stale)
+  Weight: 5-50 depending on limit. Use limit=20 (weight 5).
+
+Account (Private):
+- GET /fapi/v2/account — Account information, balances, positions
+  Weight: 5. Called on startup, after every fill, and every 60 seconds.
+
+- GET /fapi/v1/openOrders — All open orders
+  Weight: 40 for all symbols, 1 for specific symbol.
+  Called on startup for reconciliation and every 30 seconds for health check.
+
+Order Management (Private):
+- POST /fapi/v1/order — Place new order
+  Weight: 1. Priority: CRITICAL (highest in rate limit queue).
+
+- DELETE /fapi/v1/order — Cancel order
+  Weight: 1. Priority: CRITICAL.
+
+- POST /fapi/v1/batchOrders — Batch order placement (up to 5 orders)
+  Weight: 5. Used when placing entry + stop loss + take profit simultaneously.
+
+- GET /fapi/v1/userTrades — Recent trades for fill confirmation
+  Weight: 5. Called after fill events for slippage logging.
+
+2.3 USER DATA STREAM
+
+- POST /fapi/v1/listenKey — Create listen key (weight: 1)
+- PUT /fapi/v1/listenKey — Keepalive every 30 minutes (weight: 1)
+- WebSocket: wss://fstream.binance.com/ws/<listenKey>
+  Events consumed: ORDER_TRADE_UPDATE, ACCOUNT_UPDATE, MARGIN_CALL
+
+================================================================================
+SECTION 3: ENTRY LOGIC
+================================================================================
+
+3.1 PRIMARY ENTRY SIGNAL — EMA CROSSOVER SYSTEM
+
+The primary entry signal is generated on the 4-hour timeframe. All conditions
+below must be satisfied simultaneously before an entry is considered valid.
+
+Step 1: Calculate Exponential Moving Averages
+- Fast EMA period: 20 (on 4h candles)
+- Slow EMA period: 50 (on 4h candles)
+- Trend filter EMA period: 200 (on 4h candles)
+- EMA formula: EMA_today = (Price_today × k) + (EMA_yesterday × (1 − k))
+  where k = 2 / (period + 1)
+
+Step 2: Detect Crossover Event
+- LONG signal: Fast EMA (20) crosses ABOVE Slow EMA (50) AND the crossover
+  candle closes above the crossover point (no wicks-only crossovers)
+- SHORT signal: Fast EMA (20) crosses BELOW Slow EMA (50) AND the crossover
+  candle closes below the crossover point
+
+Step 3: Trend Filter Confirmation
+- LONG trades: Current price must be ABOVE the 200 EMA on the 4h timeframe.
+  If price is below 200 EMA, the long signal is REJECTED entirely.
+- SHORT trades: Current price must be BELOW the 200 EMA on the 4h timeframe.
+  If price is above 200 EMA, the short signal is REJECTED entirely.
+
+3.2 MOMENTUM CONFIRMATION — MULTI-INDICATOR VALIDATION
+
+After a valid crossover signal is detected, the following momentum indicators
+must ALL confirm the direction before entry is permitted.
+
+Condition A: MACD Confirmation
+- MACD Line = EMA(12) - EMA(26) on 4h candles
+- Signal Line = EMA(9) of MACD Line
+- MACD Histogram = MACD Line - Signal Line
+- LONG confirmation: MACD Line is above Signal Line AND MACD Histogram is
+  positive AND Histogram value is INCREASING (current bar > previous bar)
+- SHORT confirmation: MACD Line is below Signal Line AND MACD Histogram is
+  negative AND Histogram absolute value is INCREASING
+
+Condition B: RSI Momentum Confirmation
+- RSI period: 14 on 4h candles
+- RSI formula: RSI = 100 - (100 / (1 + RS)) where RS = Avg Gain / Avg Loss
+- LONG confirmation: RSI is between 50 and 75 (above neutral but not overbought)
+- SHORT confirmation: RSI is between 25 and 50 (below neutral but not oversold)
+- REJECTION: RSI above 80 rejects LONG entry (overbought, late entry)
+- REJECTION: RSI below 20 rejects SHORT entry (oversold, late entry)
+
+Condition C: ADX Trend Strength
+- ADX period: 14 on 4h candles
+- ADX must be ABOVE 25 (confirming a trending environment)
+- If ADX is between 20 and 25, reduce position size by 50% (weak trend)
+- If ADX is below 20, REJECT the trade entirely (ranging market)
+- +DI and -DI must align with trade direction:
+  LONG: +DI > -DI
+  SHORT: -DI > +DI
+
+3.3 HIGHER TIMEFRAME ALIGNMENT — DAILY TREND CHECK
+
+Before executing any trade, verify the daily (1d) timeframe supports the
+direction:
+
+- Calculate 50 EMA and 200 EMA on daily candles
+- LONG trades: Daily 50 EMA must be ABOVE Daily 200 EMA (bullish regime)
+  OR price must be above Daily 200 EMA (acceptable if golden cross pending)
+- SHORT trades: Daily 50 EMA must be BELOW Daily 200 EMA (bearish regime)
+  OR price must be below Daily 200 EMA
+
+If daily timeframe conflicts with 4h signal, the trade is REJECTED. No
+exceptions. The higher timeframe always has authority.
+
+3.4 VOLUME CONFIRMATION
+
+- Calculate 20-period average volume on 4h candles
+- The crossover candle volume must be at least 1.5x the 20-period average
+- If volume is between 1.0x and 1.5x average, reduce position size by 25%
+- If volume is below 1.0x average, REJECT the trade (no conviction)
+- Use aggTrade stream to verify volume is not concentrated in a single large
+  order (potential manipulation). If more than 40% of the candle volume comes
+  from a single 60-second window, flag for manual review but do not auto-reject.
+
+3.5 ENTRY TIMING REFINEMENT — 15-MINUTE EXECUTION
+
+Once all conditions above are met on the 4h timeframe, use the 15-minute
+timeframe for precise entry timing:
+
+- Wait for a 15-minute candle to pull back toward the fast EMA (20) on the
+  15-minute chart without violating it
+- Enter when the 15-minute candle closes in the direction of the 4h signal
+  after the pullback
+- Maximum wait time for pullback entry: 3 candles on 4h (12 hours)
+- If no pullback occurs within 12 hours, enter at market on the next 15-minute
+  candle that confirms direction (RSI turning in trade direction on 15m)
+- If price moves more than 1.5x ATR(14) on 4h in the signal direction before
+  entry, CANCEL the setup (missed entry, chasing risk too high)
+
+3.6 ORDER PLACEMENT
+
+- Primary order type: LIMIT order placed at the best bid (for longs) or best
+  ask (for shorts) from bookTicker stream
+- If LIMIT order is not filled within 30 seconds, cancel and replace at current
+  best bid/ask
+- After 3 failed LIMIT attempts (90 seconds total), switch to MARKET order
+- Immediately after entry fill, place bracket orders:
+  - STOP_MARKET for hard stop loss (see Section 4)
+  - TAKE_PROFIT_MARKET for first profit target (see Section 4)
+- Log entry details: timestamp (ms), fill price, expected price, slippage (bps),
+  order type used, number of LIMIT attempts, fill latency (ms from submission
+  to fill)
+
+================================================================================
+SECTION 4: EXIT LOGIC
+================================================================================
+
+4.1 HARD STOP LOSS
+
+- Placement: 2.0x ATR(14) on 4h below entry (for longs) or above entry
+  (for shorts)
+- ATR is calculated at the time of entry and LOCKED for the duration of the
+  trade — it does not recalculate dynamically for the hard stop
+- Order type: STOP_MARKET (guaranteed execution, accepts slippage)
+- This stop is NON-NEGOTIABLE. It must be placed on Binance as a live order
+  within 500ms of entry fill confirmation. Never rely on client-side monitoring
+  alone for the hard stop.
+- Maximum acceptable slippage on stop execution: 0.5% beyond stop price.
+  Log any slippage exceeding this threshold as an anomaly event.
+
+4.2 TRAILING STOP LOSS
+
+- Activation threshold: When unrealized profit reaches 1.0x ATR(14) from entry
+- Trail distance: 1.5x ATR(14) from the highest unrealized profit point (for
+  longs) or lowest (for shorts)
+- Step size: The trailing stop updates every time price moves 0.1x ATR in the
+  favorable direction. It NEVER moves backward.
+- Implementation: Use TRAILING_STOP_MARKET order type on Binance with
+  callbackRate calculated as: (1.5 × ATR / current_price) × 100, rounded to
+  one decimal place, clamped between 0.1% and 5.0%
+- Fallback: If Binance TRAILING_STOP_MARKET is unavailable or unsuitable,
+  implement client-side trailing with STOP_MARKET orders that are canceled and
+  replaced on each step. Cancel-replace must complete within 200ms.
+- When trailing stop activates, cancel the original hard stop loss order.
+
+4.3 PARTIAL TAKE PROFIT SCALING
+
+Scale out of winning positions in four tranches:
+
+Tranche 1: Close 25% of position at 1.0x ATR(14) profit
+- Order type: TAKE_PROFIT_MARKET
+- After fill, move hard stop to breakeven (entry price + fees)
+
+Tranche 2: Close 25% of position at 2.0x ATR(14) profit
+- Order type: TAKE_PROFIT_MARKET
+- After fill, activate trailing stop on remaining 50%
+
+Tranche 3: Close 25% of position at 3.0x ATR(14) profit
+- Order type: TAKE_PROFIT_MARKET
+- Tighten trailing stop distance to 1.0x ATR on remaining 25%
+
+Tranche 4: Remaining 25% rides the trailing stop until stopped out
+- This tranche has no fixed target — it captures extended trend moves
+- If the trend is exceptionally strong (ADX > 40 and rising), do NOT tighten
+  the trailing stop further. Let it run.
+
+4.4 BREAK-EVEN STOP
+
+- Trigger: When unrealized profit first reaches 1.0x ATR(14) from entry
+- Action: Move the hard stop loss to entry price PLUS estimated round-trip fees
+  (entry fee + exit fee for the remaining position size)
+- This ensures the trade cannot turn into a loss after reaching first target
+- Implementation: Cancel existing STOP_MARKET and place new one at breakeven
+
+4.5 TIME-BASED EXIT
+
+- Maximum trade duration: 10 days (240 four-hour candles)
+- If the position has not hit the first take profit target (1.0x ATR) within
+  5 days (120 four-hour candles), close 50% of the position at market
+- If the remaining position has not hit 2.0x ATR within 10 days, close entirely
+- Exception: If the trade is currently profitable (even if targets not reached)
+  AND ADX is above 30 AND price is on the correct side of the 20 EMA, extend
+  the maximum duration by 5 additional days (one-time extension only)
+
+4.6 SIGNAL-BASED EXIT
+
+- If a REVERSE crossover occurs on the 4h EMA system (fast crosses against
+  the trade direction), close the remaining position immediately at market,
+  regardless of profit/loss status
+- If RSI enters extreme territory against the position (above 80 for longs,
+  below 20 for shorts), close 50% of remaining position and tighten trailing
+  stop to 0.75x ATR
+- If ADX drops below 20 while in a trade, close the entire position (trend
+  has dissipated)
+
+4.7 EXIT ORDER MANAGEMENT
+
+- All exit orders must be placed on Binance as server-side orders (not
+  client-side monitoring only) wherever possible
+- If multiple exit conditions trigger simultaneously, execute them in this
+  priority order: Hard Stop > Signal-Based Exit > Trailing Stop > Time-Based >
+  Take Profit Scaling
+- After any exit (partial or full), immediately reconcile actual position size
+  with expected position size via GET /fapi/v2/account
+- Log exit details: timestamp (ms), exit price, slippage (bps), exit reason,
+  trade duration (ms), realized PnL (net of fees), R-multiple achieved
+
+================================================================================
+SECTION 5: RISK MANAGEMENT RULES
+================================================================================
+
+5.1 POSITION SIZING & CAPITAL ALLOCATION
+
+- Maximum capital allocated to this strategy: 30% of total account equity
+- Maximum capital per individual trade: 5% of current account equity
+- Position size calculation must use CURRENT account equity at the time of
+  trade entry, not initial deposit
+- Recalculate equity every 60 seconds and after every trade close
+
+5.2 ATR-BASED POSITION SIZING
+
+For each trade, position size is determined by the risk amount and stop distance:
+
+Position Size = Risk Amount / Stop Distance
+
+Where:
+- Risk Amount = Account Equity × Risk Per Trade Percentage
+- Risk Per Trade Percentage = 1.5% (base), adjusted by conditions below
+- Stop Distance = 2.0 × ATR(14) on 4h candles (in price terms)
+
+Adjustments to Risk Per Trade:
+- ADX between 20-25: Reduce to 0.75% (half of base)
+- Volume between 1.0-1.5x average: Reduce by 25% (to 1.125%)
+- If another strategy has an open position in the same asset: Reduce by 50%
+- If 2 or more strategies are positioned in the same direction across
+  correlated assets (BTC and ETH both long, for example): Reduce by 33%
+- Maximum risk per trade after all adjustments: 2.0% (cap)
+- Minimum risk per trade after all adjustments: 0.25% (floor)
+
+5.3 KELLY CRITERION IMPLEMENTATION
+
+After accumulating 100+ trades of live performance data, begin using
+fractional Kelly for position sizing:
+
+Kelly % = W - ((1 - W) / R)
+Where W = Win Rate, R = Average Win / Average Loss
+
+- Use HALF-KELLY (K/2) as the base position size percentage
+- Rolling calculation window: last 100 trades
+- Recalculate Kelly every 20 trades
+- Kelly floor: 0.25% of equity
+- Kelly ceiling: 3.0% of equity (even if Kelly suggests more)
+- If Kelly calculation returns a negative number, HALT the strategy and
+  trigger a performance review alert
+
+5.4 STOP LOSS ARCHITECTURE
+
+Hard Stop Loss:
+- 2.0x ATR(14) from entry price
+- Maximum absolute loss per trade: 2.0% of account equity (if position sizing
+  is correct, this should naturally be limited to ~1.5%)
+- If a stop loss fill results in actual loss exceeding 2.5% of account equity
+  (due to slippage, gaps, etc.), trigger an alert and reduce next trade size
+  by 50%
+
+Trailing Stop Loss:
+- Activation: 1.0x ATR unrealized profit
+- Trail distance: 1.5x ATR from highest favorable price
+- Step size: 0.1x ATR increments
+- Never moves backward under any circumstance
+
+Break-Even Stop:
+- Activates when unrealized profit reaches 1.0x ATR AND first partial take
+  profit is filled
+- Set at entry price + total estimated fees for remaining position
+
+4.5 DRAWDOWN PROTECTION
+
+Daily Drawdown Limit: 3% of starting-of-day equity
+- If the strategy's daily realized + unrealized PnL reaches -3%, halt all
+  new entries for the remainder of the calendar day (UTC)
+- Close 50% of any open losing positions
+- Resume trading at 00:00 UTC the following day
+
+Weekly Drawdown Limit: 6% of starting-of-week equity
+- If hit, halt all new entries for the remainder of the calendar week
+- Reduce open position sizes by 50%
+- Resume trading at 00:00 UTC Monday
+
+Monthly Drawdown Limit: 10% of starting-of-month equity
+- If hit, halt all new entries for the remainder of the calendar month
+- Close ALL open positions
+- Resume trading on the 1st of the following month with position sizes
+  reduced by 50% for the first 10 trades
+
+System-Wide Drawdown (across all strategies): 15%
+- If total account equity drops 15% from peak, HALT ALL STRATEGIES
+- Close ALL positions across ALL strategies
+- Require manual intervention to restart
+
+5.6 EXPOSURE LIMITS
+
+- Maximum concurrent open positions for this strategy: 5
+- Maximum exposure per single asset: 10% of account equity
+- Maximum total LONG exposure (this strategy): 25% of account equity
+- Maximum total SHORT exposure (this strategy): 25% of account equity
+- Maximum net directional exposure (this strategy): 20% of account equity
+- If BTC and ETH are both in same-direction trades, combined exposure for
+  both must not exceed 15% (high correlation pair)
+
+5.7 CIRCUIT BREAKERS
+
+Flash Crash Detection:
+- If any monitored asset drops more than 10% in 5 minutes (measured via
+  1-minute klines), close ALL positions for this strategy immediately
+- Cool-down: 2 hours before new entries allowed
+
+Abnormal Spread Detection:
+- If bid-ask spread on any held instrument exceeds 0.5% of mid-price,
+  do NOT execute any new orders. Hold existing positions but set alerts.
+- If spread exceeds 1.0%, begin closing positions with LIMIT orders only
+  (no market orders in illiquid conditions)
+
+Exchange Anomaly Detection:
+- If WebSocket message latency exceeds 5000ms, HALT new entries
+- If 3 consecutive API requests fail, HALT new entries and alert
+- If account balance reported by API differs from internal tracking by
+  more than 1%, HALT all trading and trigger reconciliation
+
+Kill Switch:
+- Manual: Expose an API endpoint and CLI command that immediately cancels
+  all open orders, closes all positions at market, and halts the strategy
+- Automated: Triggered by system-wide drawdown or multiple circuit breakers
+  firing simultaneously
+- Kill switch execution must complete within 10 seconds
+
+================================================================================
+SECTION 6: POSITION SIZING RULES
+================================================================================
+
+6.1 BASE CALCULATION
+
+Position_Size_USDT = (Account_Equity × Risk_Percentage) / (Stop_Distance_Pct)
+
+Where:
+- Account_Equity = Current total equity from GET /fapi/v2/account
+- Risk_Percentage = 1.5% base, adjusted per Section 5.2
+- Stop_Distance_Pct = (2.0 × ATR_14_4h) / Entry_Price
+
+Then:
+- Position_Size_Contracts = Position_Size_USDT / Entry_Price
+- Round DOWN to the instrument's lot size step (check exchange info filters)
+- Verify Position_Size_USDT does not exceed per-trade maximum (5% of equity)
+- Verify adding this position does not breach any exposure limits in Section 5.6
+
+6.2 LEVERAGE CALCULATION
+
+- Maximum leverage used by this strategy: 5x
+- Preferred leverage: 3x
+- If ATR(14) / Price > 3% (high volatility), reduce to 2x
+- If ATR(14) / Price > 5% (extreme volatility), reduce to 1x (no leverage)
+- Leverage is set per position, not per account
+- NEVER adjust leverage on an open position. Leverage is determined at entry
+  and remains fixed for the trade duration.
+
+6.3 SCALING IN RULES
+
+- Scaling in is permitted ONLY if the position is currently profitable
+- Add size only on pullbacks to the 20 EMA on 4h within an established trend
+- Maximum scale-in additions: 2 per trade (total 3 entries)
+- Each addition must be smaller than or equal to the previous:
+  Initial entry: 100% of calculated size
+  Scale-in 1: 50% of initial size
+  Scale-in 2: 25% of initial size
+- After each addition, recalculate the average entry price
+- After each addition, ensure the hard stop loss is adjusted to maintain the
+  maximum risk per trade constraint on the TOTAL position size
+- After each addition, re-verify all exposure limits
+
+6.4 COMPOUND GROWTH MODE
+
+- Realized profits are reinvested into future position sizing calculations
+  AUTOMATICALLY (equity-based sizing inherently compounds)
+- After a drawdown recovery (new equity high after a drawdown), wait 5 trades
+  at the NEW equity level before allowing full-size trades
+- During drawdown recovery, cap position size at 75% of what the equity-based
+  calculation suggests
+
+================================================================================
+SECTION 7: FILTERS & DISQUALIFIERS
+================================================================================
+
+7.1 SPREAD FILTER
+- Do NOT enter if bid-ask spread exceeds 0.1% of mid-price on bookTicker
+- Re-check spread within 100ms of order submission
+
+7.2 WHIPSAW PROTECTION
+- After a stop loss is hit, do NOT re-enter the same instrument in the same
+  direction for at least 2 candles on the 4h timeframe (8 hours minimum)
+- After a losing trade, require 2 consecutive 4h candles closing in the new
+  signal direction before allowing re-entry (not just the crossover candle)
+
+7.3 CONSECUTIVE LOSS HANDLING
+- After 3 consecutive losses: Reduce position size by 25% for next 3 trades
+- After 5 consecutive losses: Reduce position size by 50% for next 5 trades
+- After 7 consecutive losses: HALT the strategy. Trigger manual review alert.
+  Do not resume until review is completed and system receives manual restart.
+
+7.4 FEE THRESHOLD
+- Expected trade profit must exceed 3x the round-trip fees
+- Round-trip fee = Entry taker fee (0.04%) + Exit taker fee (0.04%) = 0.08%
+  (or applicable fee tier — query from account info)
+- Minimum expected profit: 0.24% (3 × 0.08%)
+- If 2.0x ATR / Entry Price < 0.24%, the setup is NOT viable — skip it.
+  This effectively filters out extremely low-volatility environments.
+
+7.5 CORRELATION FILTER
+- Before entering a new trade, check all open positions across ALL strategies
+- If a new LONG BTC trade is proposed and there are already 2+ LONG positions
+  in highly correlated assets (ETH, SOL, BNB), REJECT the trade
+- Correlation matrix must be maintained and updated weekly using 30-day rolling
+  returns. Pairs with correlation > 0.75 are considered "highly correlated."
+
+7.6 NEWS/EVENT FILTER
+- Maintain a calendar of known high-impact events:
+  FOMC decisions, CPI releases, major protocol upgrades, ETF decision dates
+- In the 2-hour window before and 1-hour window after a known event,
+  do NOT enter new positions
+- For open positions during events, tighten stops to 1.0x ATR (from 2.0x)
+- If an event is unexpected (detected by sudden 3x+ volume spike across
+  multiple assets simultaneously), trigger a 30-minute entry pause
+
+7.7 MARKET REGIME FILTER
+- Calculate the Hurst Exponent on a rolling 100-day window for each asset
+- If H < 0.45 (mean-reverting regime), REJECT trend following signals
+- If H is between 0.45 and 0.55 (random walk), reduce position size by 50%
+- If H > 0.55 (trending regime), proceed with normal position sizing
+- Recalculate Hurst Exponent daily at 00:00 UTC
+
+7.8 OPEN INTEREST DIVERGENCE
+- If price is making new highs but open interest is declining (bearish
+  divergence), flag LONG entries for reduced size (50%)
+- If price is making new lows but open interest is declining (shorts covering),
+  flag SHORT entries for reduced size (50%)
+
+================================================================================
+SECTION 8: 24/7 OPERATION HANDLING
+================================================================================
+
+8.1 STATE PERSISTENCE
+
+All of the following must be persisted to disk/database every 5 seconds:
+- All open positions: instrument, direction, size, entry price, entry time,
+  current stop level, current take profit levels, trailing stop state,
+  scale-in history, unrealized PnL
+- All pending orders: order ID, type, side, price, quantity, status, purpose
+  (stop loss, take profit, entry, scale-in)
+- Strategy state: current indicator values (EMA 20/50/200, MACD, RSI, ADX, ATR)
+  for each instrument and timeframe
+- Performance counters: daily PnL, weekly PnL, monthly PnL, consecutive
+  win/loss count, total trade count
+- Drawdown tracking: peak equity value, current drawdown percentage, daily/
+  weekly/monthly drawdown levels
+- Pending signal state: any crossover detected but awaiting pullback entry
+
+Storage format: JSON files with atomic writes (write to temp file, then rename)
+Backup: Maintain last 3 state snapshots for rollback capability
+
+8.2 STARTUP RECONCILIATION
+
+On every startup (including crash recovery), execute this sequence:
+
+Step 1: Load last persisted state from disk
+Step 2: Query Binance for actual account state:
+  - GET /fapi/v2/account — positions, balances
+  - GET /fapi/v1/openOrders — all open orders
+  - GET /fapi/v1/userTrades — last 100 trades (to detect fills during downtime)
+Step 3: Reconcile:
+  - For each position found on Binance but NOT in local state: log as orphan,
+    set a tight stop loss (1.0x recent ATR), alert operator
+  - For each position in local state but NOT on Binance: mark as closed,
+    calculate PnL from last known price, log discrepancy
+  - For each open order on Binance not in local state: cancel it, log
+  - For each order in local state not on Binance: mark as cancelled/filled,
+    check fills via userTrades
+Step 4: Warm up indicators:
+  - Fetch historical klines for each instrument and timeframe (200 candles)
+  - Calculate all indicators from scratch (do not trust cached values)
+Step 5: Resume normal operation
+
+Maximum reconciliation time: 60 seconds. If reconciliation cannot complete
+within 60 seconds, halt and alert operator.
+
+8.3 HEARTBEAT MONITORING
+
+- This strategy process must emit a heartbeat every 10 seconds
+- Heartbeat includes: timestamp, number of active positions, unrealized PnL,
+  last data timestamp per stream, memory usage (MB)
+- If the monitoring system does not receive a heartbeat for 30 seconds,
+  trigger automatic process restart
+- If 3 restarts occur within 1 hour, halt the strategy and alert operator
+
+8.4 MEMORY MANAGEMENT
+
+- Monitor process memory usage every 60 seconds
+- If memory exceeds 500MB, trigger garbage collection and log warning
+- If memory exceeds 1GB, trigger graceful restart (persist state, restart)
+- Clear indicator calculation caches every 24 hours (recalculate from raw data)
+- Kline history buffers: Retain maximum 500 candles per timeframe per
+  instrument in memory. Older data is discarded.
+
+8.5 LOG ROTATION
+
+- Log files rotate every 24 hours
+- Retain last 30 days of logs
+- Trade log (entries, exits, fills) is NEVER deleted — append-only permanent
+  record
+- Separate log files for: trades, errors, performance, system health
+
+8.6 BINANCE MAINTENANCE HANDLING
+
+- If WebSocket disconnects and reconnection fails for 60+ seconds, assume
+  potential maintenance
+- Query Binance system status endpoint: GET /sapi/v1/system/status
+- If maintenance confirmed: hold all existing positions (stops are server-side),
+  halt new entries, retry connection every 30 seconds
+- When connection restores: full reconciliation (Section 8.2)
+
+================================================================================
+SECTION 9: PAPER TRADING SPECIFICATIONS
+================================================================================
+
+9.1 FILL SIMULATION
+
+- Do NOT fill paper orders at the trigger price. Simulate realistic fills:
+- MARKET order simulation: Fill at the best available price PLUS slippage
+  model. Slippage = order_size / (available_depth_at_best_level × 5).
+  Walk through order book depth levels to simulate actual fill distribution.
+- LIMIT order simulation: Fill only if price trades THROUGH the limit price
+  (not just touches it). Partial fills based on volume at that price level.
+- STOP_MARKET simulation: Trigger when mark price hits stop level, then fill
+  as MARKET order with slippage simulation.
+
+9.2 FEE APPLICATION
+
+- Apply Binance Futures fee structure to all paper trades:
+  Maker fee: 0.02% of notional value
+  Taker fee: 0.04% of notional value
+- MARKET orders always incur taker fee
+- LIMIT orders that fill immediately (crossed the spread) incur taker fee
+- LIMIT orders that rest and later fill incur maker fee
+- Include fees in ALL PnL calculations. No pre-fee metrics.
+
+9.3 PAPER EQUITY TRACKING
+
+- Starting paper equity: configurable, default $10,000
+- Track independently from live account
+- Maintain full equity curve with millisecond timestamps
+- Calculate all performance metrics identically to live trading
+
+9.4 GO-LIVE CRITERIA
+
+The strategy may transition from paper to live when ALL of the following are
+met over a minimum 60-day paper trading period:
+
+- Minimum 50 completed trades
+- Net PnL is positive (after all simulated fees)
+- Win rate is above 35%
+- Profit factor (gross wins / gross losses) is above 1.3
+- Maximum drawdown has not exceeded 12%
+- Sharpe ratio (annualized) is above 0.8
+- No single trade loss exceeds 2.5% of paper equity
+- Strategy has been running continuously (uptime > 95%)
+
+If ANY criterion is not met, the paper trading period extends until all are
+satisfied. There is no shortcut to live trading.
+
+================================================================================
+SECTION 10: PERFORMANCE METRICS
+================================================================================
+
+All metrics must be calculated in real-time, updated after every trade close,
+and queryable via the dashboard API.
+
+10.1 STANDARD METRICS (required for all strategies)
+
+- Total PnL: realized + unrealized, net of all fees
+- Win Rate: winning trades / total trades (exclude breakeven)
+- Loss Rate: losing trades / total trades
+- Breakeven Rate: trades closed within ±0.05% of entry / total trades
+- Average Win: mean profit of winning trades (USDT and percentage)
+- Average Loss: mean loss of losing trades (USDT and percentage)
+- Profit Factor: sum of all wins / sum of all losses (absolute value)
+- Sharpe Ratio: (annualized return − risk-free rate) / annualized std dev
+  Rolling 30-day AND all-time. Risk-free rate: 5% (configurable).
+- Sortino Ratio: (annualized return − risk-free rate) / downside deviation
+- Maximum Drawdown: peak-to-trough, with exact timestamps and recovery time
+- Calmar Ratio: annualized return / maximum drawdown
+- Average Trade Duration: mean time from entry to full exit (ms and human-readable)
+- Expectancy: (Win Rate × Avg Win) − (Loss Rate × Avg Loss)
+- R-Multiple Distribution: histogram of trade outcomes in units of initial risk
+- Trade Frequency: trades per hour, day, week
+- Consecutive Win Streak: current and all-time maximum
+- Consecutive Loss Streak: current and all-time maximum
+- Equity Curve: timestamped equity values with drawdown overlay
+
+10.2 STRATEGY-SPECIFIC METRICS
+
+- Trend Capture Efficiency: Average percentage of trend move captured vs total
+  move from entry signal to trend reversal signal
+- Average R-Multiple: mean R achieved across all trades (target: > 2.0R)
+- Scaling Effectiveness: compare average PnL of trades with scale-ins vs
+  without scale-ins
+- Timeframe Agreement Rate: percentage of 4h signals confirmed by daily TF
+- ADX-Stratified Performance: separate win rate and profit factor for trades
+  entered at ADX 25-30, 30-40, and 40+
+- Volume-Stratified Performance: separate metrics for normal volume vs high
+  volume entries
+- Holding Period Distribution: histogram of trade durations
+- Slippage Analysis: average entry slippage, average exit slippage, total
+  slippage cost as percentage of gross profits
+
+10.3 PERFORMANCE BREAKDOWN DIMENSIONS
+
+Track all metrics broken down by:
+- Asset (BTC, ETH, SOL, etc.)
+- Time of day (4-hour blocks in UTC)
+- Day of week
+- Market regime (trending H > 0.55 vs ranging H < 0.45)
+- Direction (long vs short)
+- Month
+
+================================================================================
+SECTION 11: EDGE CASES & FAILURE MODES
+================================================================================
+
+11.1 WEBSOCKET DISCONNECTION DURING OPEN TRADE
+- All stop losses and take profits are server-side orders on Binance. They
+  remain active even if the bot disconnects.
+- On reconnection, immediately reconcile state (Section 8.2)
+- If disconnection lasted more than 5 minutes, do NOT enter new trades for
+  10 minutes after reconnection (allow data to stabilize)
+
+11.2 PARTIAL FILL ON ENTRY
+- If entry LIMIT order is partially filled and then cancelled (due to timeout):
+  - If filled amount is > 50% of intended size: keep the position, adjust
+    stop loss and take profit quantities accordingly
+  - If filled amount is < 50%: close the partial position at market if
+    profitable, or hold with tightened stop if within 0.3% of entry
+- Recalculate all exit order quantities based on actual filled amount
+
+11.3 STOP LOSS FILL AT WORSE PRICE THAN EXPECTED (GAP/SLIPPAGE)
+- Log the slippage event with full details
+- If actual loss exceeds 2x the expected loss, trigger an alert
+- Add the excess loss to the drawdown tracking
+- Do NOT attempt to "average down" or add to a losing position after stop
+
+11.4 EXCHANGE RETURNING STALE DATA
+- Compare last WebSocket message timestamp with current system time
+- If last message is older than 10 seconds on any stream, mark that stream
+  as STALE and do not use its data for decisions
+- If the kline stream for the primary timeframe (4h) is stale for 60+ seconds,
+  halt new entries until fresh data resumes
+- Fall back to REST API polling (GET /fapi/v1/klines) every 5 seconds as
+  temporary measure during WebSocket staleness
+
+11.5 RAPID EMA CROSSOVER WHIPSAW
+- If the 20/50 EMA cross occurs, a trade is entered, stopped out, and then
+  the cross occurs again in the same direction within 2 candles: this is a
+  classic whipsaw pattern
+- Enforce the whipsaw protection (Section 7.2): minimum 8-hour cooldown
+- Log whipsaw events. If more than 3 whipsaws occur in a week on the same
+  instrument, suspend that instrument for 1 week
+
+11.6 INSUFFICIENT BALANCE FOR ENTRY
+- Before placing any entry order, verify available margin is sufficient:
+  Required margin = Position Size / Leverage
+- If available margin is insufficient, reduce position size until it fits
+- If even the minimum position size (exchange minimum notional) requires more
+  margin than available, skip the trade entirely
+- Log the skipped trade for performance analysis (was it a missed winner?)
+
+11.7 BINANCE API ERROR ON ORDER PLACEMENT
+- Retry logic: maximum 3 retries with 500ms delay between attempts
+- If error is -2019 (insufficient margin): reduce size by 25% and retry once
+- If error is -1015 (too many orders): wait 5 seconds, retry
+- If error is -4028 (timestamp outside recvWindow): resync time, retry
+- If all retries fail: log the failure, send alert, DO NOT enter the trade
+- If a stop loss placement fails after entry fill: THIS IS CRITICAL. Retry
+  up to 10 times with 200ms delays. If still failing, execute a market close
+  of the position immediately. NEVER hold a position without a stop loss.
+
+11.8 INDICATOR CALCULATION ANOMALY
+- If any indicator returns NaN, Infinity, or a value outside its valid range
+  (RSI outside 0-100, ADX negative, etc.): discard the value, log error,
+  and use the previous valid value
+- If 3 consecutive indicator calculations return anomalies, halt the strategy
+  and trigger recalculation from raw kline data
+
+================================================================================
+SECTION 12: DEPENDENCIES & INTEGRATION POINTS
+================================================================================
+
+12.1 UNIFIED WEBSOCKET MANAGER
+
+- This strategy registers with the shared WebSocket manager at startup
+- Registration includes: strategy ID (STRAT-001), list of required streams,
+  callback function for each message type
+- The WebSocket manager routes parsed messages to this strategy's handler
+  based on stream type and symbol
+- This strategy must NOT create its own WebSocket connections
+- On WebSocket reconnect, the manager automatically resubscribes all streams
+  and notifies this strategy to re-validate its data state
+
+12.2 CENTRALIZED RATE LIMIT MANAGER
+
+- All REST API calls from this strategy must go through the rate limiter
+- This strategy's API budget allocation:
+  Normal operation: 200 weight per minute (out of shared 1200 budget)
+  During reconciliation: 400 weight per minute (temporary burst)
+  During kill switch: UNLIMITED (safety override)
+- Order placement/cancellation requests from this strategy are tagged as
+  CRITICAL priority and bypass the queue
+- Data requests (klines, account info) are tagged as NORMAL priority
+
+12.3 SHARED RISK MANAGER
+
+- Before every trade entry, this strategy must query the shared risk manager:
+  "May I open a [LONG/SHORT] [SIZE] position in [SYMBOL]?"
+- The risk manager checks cross-strategy exposure limits, correlation limits,
+  and system-wide drawdown status before approving
+- If denied, the trade is skipped and logged with the denial reason
+- This strategy reports every position change to the risk manager within 100ms
+  of fill confirmation
+
+12.4 DATABASE
+
+- All trade records are written to the shared database
+- Schema must support: strategy_id, trade_id, instrument, direction, entry_price,
+  exit_price, entry_time_ms, exit_time_ms, size, realized_pnl, fees, slippage,
+  exit_reason, r_multiple, duration_ms, indicator_values_at_entry
+- State snapshots are stored in a separate table/collection
+- Performance metrics are materialized views or pre-calculated aggregates
+  updated after every trade close
+
+12.5 DASHBOARD API
+
+- This strategy exposes the following via the shared dashboard:
+  Current positions (real-time)
+  Pending signals (crossovers awaiting entry conditions)
+  Performance metrics (all from Section 10)
+  Health status (last heartbeat, memory, latency)
+  Configuration (current parameters, can be hot-reloaded)
+- Configuration changes via dashboard take effect on the NEXT trade, not
+  retroactively on open positions
+
+12.6 ALERTING SYSTEM
+
+- This strategy sends alerts to the shared alerting system for:
+  INFO: Trade entry, trade exit, daily performance summary
+  WARNING: Drawdown threshold approaching (80% of limit), high slippage,
+  indicator anomaly, whipsaw detection
+  CRITICAL: Drawdown limit hit, circuit breaker triggered, stop loss
+  placement failure, kill switch activation
+  EMERGENCY: System-wide halt triggered
+- Alert delivery: dashboard notification + configurable webhook (Telegram,
+  Discord, email)
+
+================================================================================
+END OF DOCUMENT
+================================================================================

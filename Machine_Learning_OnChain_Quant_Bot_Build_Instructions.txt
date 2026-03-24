@@ -1,0 +1,750 @@
+================================================================================
+MACHINE LEARNING & ON-CHAIN QUANTITATIVE MODELS
+ALGORITHMIC TRADING BOT — BUILD INSTRUCTIONS
+================================================================================
+Version: 1.0
+Classification: Proprietary — Quantitative Trading Desk
+Strategy ID: STRAT-010-ML-ONCHAIN
+================================================================================
+
+TABLE OF CONTENTS
+1.  Strategy Overview
+2.  Required Data Streams
+3.  Entry Logic
+4.  Exit Logic
+5.  Risk Management Rules
+6.  Position Sizing Rules
+7.  Filters & Disqualifiers
+8.  24/7 Operation Handling
+9.  Paper Trading Specifications
+10. Performance Metrics
+11. Edge Cases & Failure Modes
+12. Dependencies & Integration Points
+
+================================================================================
+SECTION 1: STRATEGY OVERVIEW
+================================================================================
+
+1.1 WHAT THIS STRATEGY DOES
+
+This strategy combines machine learning models with on-chain blockchain
+analytics to generate trading signals unavailable through traditional
+technical analysis alone. It ingests multiple data categories — price,
+volume, order book, on-chain metrics, sentiment, and derivatives data —
+processes them through trained ML models, and outputs probabilistic
+directional forecasts that drive position management.
+
+1.2 MARKET CONDITIONS TARGETED
+
+- All market conditions (the ML model adapts to different regimes)
+- Particularly effective at: detecting accumulation phases before breakouts
+  (via on-chain flow analysis), identifying distribution phases before drops,
+  and synthesizing conflicting signals that confuse simpler strategies
+
+1.3 THEORETICAL EDGE
+
+- Multi-factor models combining RSI, MACD, gas usage, active addresses, and
+  sentiment achieved 97% annualized returns with Sharpe of 2.5 in backtesting
+  (NOTE: forward-tested performance was far more modest at 33% in a bull
+  quarter and −10% in a bear quarter — significant overfitting risk)
+- On-chain data provides crypto-native alpha: exchange flows, whale wallet
+  movements, and MVRV ratio are leading indicators not available in traditional
+  markets
+- The model ensemble approach combines multiple weak learners into a stronger
+  composite signal, reducing reliance on any single indicator
+
+1.4 CRITICAL WARNING: OVERFITTING
+
+This strategy has the HIGHEST overfitting risk of all ten strategies.
+The following safeguards are NON-NEGOTIABLE:
+- Walk-forward analysis: optimize on one period, test on unseen data, repeat
+- Minimum 101 trades for 70% statistical confidence; 666 trades for 99%
+- Out-of-sample validation on at least 25% of data that was NEVER seen during
+  training or parameter selection
+- Monte Carlo simulation: permute trade order 1000× to assess robustness
+- Parameter sensitivity analysis: if changing any parameter by 10% collapses
+  performance, the strategy is overfit
+- Maximum 15 tuned parameters (more = higher overfitting risk)
+
+1.5 TARGET INSTRUMENTS
+
+Primary: BTC/USDT, ETH/USDT (perpetual futures)
+Secondary: SOL/USDT (perpetual futures)
+Maximum instruments: 3 (ML model complexity increases rapidly with instruments)
+
+1.6 MODEL ARCHITECTURE
+
+Primary Model: Gradient Boosted Decision Trees (XGBoost/LightGBM)
+- More robust than deep learning for tabular financial data
+- Less prone to overfitting than LSTM/neural networks
+- Feature importance is interpretable (critical for debugging)
+
+Secondary Model: LSTM Neural Network
+- For sequential pattern recognition in time-series features
+- Used as a CONFIRMATION signal, not standalone
+- Ensemble: XGBoost provides the primary signal, LSTM must agree
+
+Ensemble Method: Weighted average of model probabilities
+- XGBoost weight: 0.60
+- LSTM weight: 0.40
+- Combined probability > 0.65: LONG signal
+- Combined probability < 0.35: SHORT signal
+- Combined probability 0.35-0.65: NO TRADE (model uncertain)
+
+================================================================================
+SECTION 2: REQUIRED DATA STREAMS
+================================================================================
+
+2.1 BINANCE WEBSOCKET STREAMS (per instrument, max 3)
+
+Price and Volume:
+- <symbol>@kline_1m   — 1-minute candles (feature engineering)
+- <symbol>@kline_5m   — 5-minute candles
+- <symbol>@kline_15m  — 15-minute candles
+- <symbol>@kline_1h   — 1-hour candles (primary signal timeframe)
+- <symbol>@kline_4h   — 4-hour candles
+- <symbol>@kline_1d   — Daily candles
+
+Order Book:
+- <symbol>@depth20@100ms — Order book imbalance features
+
+Trade:
+- <symbol>@aggTrade     — Trade flow analysis, large order detection
+
+Mark Price:
+- <symbol>@markPrice@1s — Funding rate, mark/index divergence
+
+Liquidation:
+- <symbol>@forceOrder   — Liquidation flow as a feature
+
+Book Ticker:
+- <symbol>@bookTicker   — Execution pricing
+
+Total per instrument: 11
+Maximum total: 33
+
+2.2 ON-CHAIN DATA SOURCES (EXTERNAL APIs)
+
+The following on-chain metrics are used as model features. Each requires an
+external API subscription. The strategy must function (with reduced accuracy)
+if any source is unavailable.
+
+Source 1: Glassnode API (or equivalent)
+Metrics fetched daily:
+- Exchange Net Flow (BTC, ETH): net inflow/outflow to exchanges
+  Positive = selling pressure, Negative = accumulation
+- MVRV Ratio: Market Value to Realized Value
+  Below 1.0 = undervalued relative to cost basis
+- NUPL (Net Unrealized Profit/Loss): 
+  Below 0 = market in net loss (capitulation)
+- SOPR (Spent Output Profit Ratio):
+  Below 1.0 = selling at a loss (bottoming signal)
+- Active Addresses (24h): proxy for network activity
+- Hash Rate (BTC): miner health indicator
+- Stablecoin Exchange Reserves: buying power sitting on exchanges
+
+Source 2: Social Sentiment (CryptoCompare or LunarCrush)
+Metrics fetched hourly:
+- Social volume (mentions across Twitter, Reddit, Telegram)
+- Sentiment score (bullish/bearish classification)
+- Galaxy Score or equivalent composite
+
+Source 3: Derivatives Data (from Binance itself)
+Metrics fetched every 15 minutes:
+- Open Interest: GET /fapi/v1/openInterest
+- Long/Short Ratio: GET /futures/data/globalLongShortAccountRatio
+- Top Trader Long/Short Ratio: GET /futures/data/topLongShortPositionRatio
+- Taker Buy/Sell Volume: GET /futures/data/takerlongshortRatio
+
+Total external API calls: approximately 100 per day (Glassnode),
+96 per day (social), 96 per day (derivatives) = well within typical API limits.
+
+2.3 REST API ENDPOINTS (BINANCE)
+
+Market Data:
+- GET /fapi/v1/klines — Historical data for model training and feature warm-up.
+  On startup: 1000 candles per timeframe per instrument.
+  HEAVY startup cost: 3 instruments × 6 timeframes × 5 weight = 90 weight
+  (spread over multiple minutes)
+
+Account and Order endpoints: Same as STRAT-001.
+
+================================================================================
+SECTION 3: ENTRY LOGIC
+================================================================================
+
+3.1 FEATURE ENGINEERING (RUN EVERY HOUR)
+
+At every 1h candle close, compute the following features for each instrument:
+
+Technical Features (computed from kline data):
+1.  RSI(14) on 1h
+2.  RSI(14) on 4h
+3.  RSI(14) on 1d
+4.  MACD histogram on 1h (EMA12 − EMA26 signal EMA9)
+5.  MACD histogram on 4h
+6.  EMA20/EMA50 ratio on 1h (cross indicator)
+7.  EMA50/EMA200 ratio on 4h
+8.  ATR(14) on 1h (volatility)
+9.  ATR(14) on 4h
+10. Bollinger Band position: (Close − Lower_BB) / (Upper_BB − Lower_BB) on 4h
+11. ADX(14) on 4h (trend strength)
+12. OBV (On-Balance Volume) slope over 24 1h bars
+13. Volume ratio: current 1h volume / 20-period average volume
+14. High-Low range: (High − Low) / Close on 1h (intrabar volatility)
+
+Order Book Features (from depth20 stream):
+15. Bid-Ask Imbalance: (Σ bid_qty − Σ ask_qty) / (Σ bid_qty + Σ ask_qty)
+    Averaged over the last 60 minutes of 100ms snapshots
+16. Order Book Slope: difference in cumulative depth between levels 1-5 and
+    levels 15-20 (measures whether depth is concentrated or distributed)
+17. Spread as percentage of mid-price (averaged over 60 minutes)
+
+Derivatives Features:
+18. Funding Rate (current predicted)
+19. Funding Rate 24h average
+20. Open Interest change (24h % change)
+21. Long/Short ratio (global)
+22. Top Trader Long/Short ratio
+23. Taker Buy/Sell ratio (24h)
+24. Liquidation imbalance: (long_liq_volume − short_liq_volume) over 24h
+    from forceOrder stream
+
+On-Chain Features (daily, forward-filled for hourly model):
+25. Exchange Net Flow (24h, normalized to 30-day average)
+26. MVRV Ratio
+27. NUPL
+28. SOPR
+29. Active Address % change (7d)
+30. Stablecoin Reserve % change (7d)
+
+Sentiment Features (hourly):
+31. Social volume z-score (current vs 30-day avg)
+32. Sentiment score (−1 to +1)
+
+Derived Features:
+33. RSI divergence: price making new high/low but RSI not confirming (binary)
+34. Volume-price divergence: price trending but volume declining (binary)
+35. On-chain vs price divergence: accumulation on-chain but price dropping
+
+TOTAL FEATURES: 35
+
+3.2 FEATURE PREPROCESSING
+
+Step 1: Handle Missing Values
+- If any on-chain metric is unavailable: forward-fill from last known value
+- If forward-fill is older than 72 hours: mark feature as NULL and use the
+  model's built-in missing value handling (XGBoost handles NaN natively)
+- NEVER impute with mean/median during live inference (introduces look-ahead bias)
+
+Step 2: Normalize
+- Z-score normalization using a ROLLING 180-day window for each feature:
+  Normalized = (Value − Rolling_Mean_180d) / Rolling_StdDev_180d
+- Do NOT use the global mean/std (would include future data in training)
+
+Step 3: Lagged Features
+- Include 3 lags of each primary feature (t-1, t-2, t-3 on 1h timeframe)
+- This gives the model temporal context without requiring RNN architecture
+  for the XGBoost model
+- Total feature count with lags: 35 + (35 × 3) = 140
+
+3.3 MODEL INFERENCE
+
+Step 4: XGBoost Prediction
+- Input: 140-dimensional feature vector
+- Output: Probability of price being HIGHER in 4 hours (P_long)
+- The model was trained on historical data with binary labels:
+  1 if price 4 hours later > current price + transaction costs
+  0 otherwise
+
+Step 5: LSTM Prediction (Confirmation)
+- Input: Sequence of last 24 feature vectors (24 hours of hourly features)
+  Shape: (24, 35) — raw features, not lagged
+- Output: Probability of price being HIGHER in 4 hours (P_long_lstm)
+- The LSTM captures sequential patterns that XGBoost misses
+
+Step 6: Ensemble Combination
+- P_final = 0.60 × P_xgboost + 0.40 × P_lstm
+
+Step 7: Signal Generation
+- P_final > 0.65: LONG signal (confidence: HIGH if > 0.75, MODERATE if 0.65-0.75)
+- P_final < 0.35: SHORT signal (confidence: HIGH if < 0.25, MODERATE if 0.25-0.35)
+- 0.35 ≤ P_final ≤ 0.65: NO TRADE (model uncertain)
+
+3.4 ENTRY CONFIRMATION
+
+After the model generates a LONG or SHORT signal:
+
+Condition A: Signal Persistence
+- The signal must persist for 2 consecutive hourly evaluations
+  (avoids acting on a single noisy prediction)
+
+Condition B: Trend Alignment
+- For LONG: EMA20 must be above EMA50 on the 4h chart (trend support)
+  OR model confidence is HIGH (P > 0.75, overrides trend requirement)
+- For SHORT: EMA20 must be below EMA50 on 4h
+  OR model confidence is HIGH (P < 0.25)
+
+Condition C: Volatility Check
+- ATR(14) on 4h must be > 0.5% of price (minimum volatility for the trade
+  to overcome transaction costs)
+
+3.5 ORDER EXECUTION
+
+Same as STRAT-001 Section 3.6:
+- LIMIT at best bid/ask, 30-second timeout, then MARKET
+- Immediately place stop loss and take profit brackets
+- Log all entry details plus model prediction values and feature importance
+  (XGBoost feature importance for the specific prediction)
+
+================================================================================
+SECTION 4: EXIT LOGIC
+================================================================================
+
+4.1 MODEL-BASED EXIT
+
+- Re-evaluate the model every hour while in a position
+- If the model signal REVERSES (LONG position but model now predicts SHORT
+  with P < 0.40): close the position
+- If the model becomes uncertain (P between 0.40 and 0.60 for 3 consecutive
+  hours): close the position (edge has dissipated)
+
+4.2 TAKE PROFIT — TIERED
+
+Tranche 1: Close 30% at 1.5× ATR(14) 4h profit
+Tranche 2: Close 30% at 3.0× ATR(14) 4h profit
+Tranche 3: Close remaining 40% via trailing stop (activated at 2.0× ATR profit,
+  trail distance 1.5× ATR)
+
+4.3 HARD STOP LOSS
+
+- 2.0× ATR(14) on 4h from entry (server-side STOP_MARKET on Binance)
+- Maximum dollar loss per trade: 2% of account equity
+
+4.4 TIME-BASED EXIT
+
+- Maximum holding period: 48 hours (the model predicts 4-hour moves; holding
+  beyond 48 hours is outside the prediction horizon)
+- If break-even or better after 24 hours but targets not reached: tighten stop
+  to 1.0× ATR to protect gains
+
+4.5 FEATURE ANOMALY EXIT
+
+- If during a trade, a critical on-chain metric has a sudden regime change
+  (e.g., exchange net flow switches from outflow to massive inflow — reversal
+  of the condition that drove the entry): close within 2 hours
+- Critical metrics for this trigger: Exchange Net Flow, MVRV extreme reversal,
+  SOPR crossing 1.0 in the direction against the trade
+
+================================================================================
+SECTION 5: RISK MANAGEMENT RULES
+================================================================================
+
+5.1 POSITION SIZING & CAPITAL ALLOCATION
+
+- Maximum capital for this strategy: 20% of total account equity
+- Maximum per trade: 4% of equity
+- Risk per trade: 1.5% (moderate — higher than mean reversion because the
+  model should have a genuine edge, lower than momentum because the edge
+  is less proven in live trading)
+
+5.2 CONFIDENCE-BASED SIZING
+
+- HIGH confidence (P > 0.75 or P < 0.25): Full position size (100%)
+- MODERATE confidence (0.65-0.75 or 0.25-0.35): 60% position size
+- NO TRADE zone: 0% (no position)
+
+5.3 MODEL PERFORMANCE-BASED SIZING
+
+Track the model's rolling 50-trade accuracy:
+- If accuracy > 60%: full sizing
+- If accuracy 50-60%: reduce sizing to 50%
+- If accuracy < 50%: HALT the strategy (model is not working)
+  Do not resume until model is retrained and re-validated
+
+5.4 STOP LOSS ARCHITECTURE
+
+Hard stop: 2.0× ATR(14) 4h
+Dollar cap: 2% of equity
+Trailing: activates at 2.0× ATR profit, trail 1.5× ATR
+Break-even: after Tranche 1 profit target
+Time stop: 48 hours maximum
+
+5.5 DRAWDOWN PROTECTION
+
+Daily: 3% halt
+Weekly: 5%
+Monthly: 8%
+System-wide: 15%
+
+Additional: If the model's rolling Sharpe ratio (30-trade window) drops below
+0.5, reduce position sizes by 50% until it recovers above 1.0.
+
+5.6 CIRCUIT BREAKERS
+
+Model Error:
+- If model inference fails (exception, NaN output, timeout): skip the signal
+  period and alert. Do NOT trade without a valid model prediction.
+- If model inference fails 3 consecutive times: halt and investigate
+
+Data Source Failure:
+- If on-chain data is unavailable for > 24 hours: reduce confidence in model
+  predictions by 25% (set multiplier of 0.75 on all signals)
+- If 3+ data sources are simultaneously unavailable: halt model inference
+  entirely, defer to other strategies
+
+Feature Distribution Drift:
+- Monitor key feature distributions weekly: if any feature's mean or variance
+  has shifted by > 2σ from the training distribution, flag for model retraining
+- This detects concept drift — the market has changed, the model may be stale
+
+Kill Switch: Same as STRAT-001 (close all, cancel all, halt)
+
+================================================================================
+SECTION 6: POSITION SIZING RULES
+================================================================================
+
+6.1 BASE CALCULATION
+
+Same as STRAT-001:
+Position_Size = (Equity × Risk_Per_Trade) / Stop_Distance_Pct
+
+6.2 CONFIDENCE ADJUSTMENT (Section 5.2)
+
+Position_Size_Adjusted = Position_Size × Confidence_Multiplier
+
+6.3 PERFORMANCE ADJUSTMENT (Section 5.3)
+
+Position_Size_Final = Position_Size_Adjusted × Performance_Multiplier
+
+6.4 LEVERAGE
+
+- Maximum: 5x
+- Preferred: 3x
+- Reduce to 2x if ATR/Price > 3%
+
+6.5 SCALING IN
+
+- NOT permitted for this strategy
+  (The model produces a single prediction per interval; scaling in based on
+   subsequent predictions could compound errors if the model is wrong)
+
+================================================================================
+SECTION 7: FILTERS & DISQUALIFIERS
+================================================================================
+
+7.1 MODEL FRESHNESS
+- Model must have been retrained within the last 30 days
+- If model age > 30 days: reduce confidence by 25%
+- If model age > 60 days: HALT strategy until retrained
+
+7.2 PREDICTION CONFIDENCE FILTER
+- P_final must be outside 0.35-0.65 range (sufficient conviction)
+- If model is consistently producing 0.45-0.55 predictions (uncertain):
+  the market may be in a regime the model cannot classify — pause trading
+
+7.3 FEATURE AVAILABILITY
+- Minimum required features: 25 out of 35 (70%)
+  (The model can handle missing features via NaN handling, but below 70%
+   the predictions become unreliable)
+- If < 25 features available: skip the signal period
+
+7.4 WHIPSAW PROTECTION
+- After a stop loss, do not re-enter the same instrument for 4 hours
+  (model needs time for new information to propagate through features)
+
+7.5 CROSS-STRATEGY FILTER
+- Check other strategies' positions before entering
+- If STRAT-001, STRAT-003, or STRAT-004 already has a position in the
+  same instrument in the OPPOSITE direction: require HIGH confidence
+  (P > 0.75 or P < 0.25) to override
+- If same direction: normal confidence threshold applies
+
+7.6 FEE THRESHOLD
+- Same as STRAT-001: expected profit must exceed 3× round-trip fees
+
+7.7 CONSECUTIVE LOSS HANDLING
+- After 4 consecutive losses: reduce sizing by 50%
+- After 6 consecutive losses: halt strategy, retrain model
+- After halt: minimum 30-day paper trading validation before resuming
+
+================================================================================
+SECTION 8: 24/7 OPERATION HANDLING
+================================================================================
+
+8.1 STATE PERSISTENCE (Every 5 seconds)
+
+- Open positions with entry details and model prediction at entry
+- Current feature vector (all 35 features, last 24 hours of history)
+- Model prediction history: last 100 predictions with timestamps and values
+- Rolling performance tracking: last 100 trades with outcomes
+- Model metadata: version, training date, validation metrics
+- On-chain data cache: last known values for all metrics with timestamps
+
+8.2 STARTUP RECONCILIATION
+
+Same as STRAT-001, plus:
+- Verify model file exists and loads correctly
+- Warm up feature calculation pipeline:
+  Fetch 200 candles per timeframe per instrument (heavy data requirement)
+  Fetch last 30 days of on-chain data
+  Calculate all features from scratch
+  Run a test prediction to verify model inference works
+- Total warm-up time budget: 5 minutes maximum
+- If warm-up cannot complete: halt and alert
+
+8.3 MODEL RETRAINING SCHEDULE
+
+- Full retrain: every 30 days
+- Retraining procedure (OFFLINE — not during live trading):
+  1. Collect all data from the last 365 days
+  2. Split: 60% train, 15% validation, 25% test (chronological split ONLY)
+  3. Train XGBoost with cross-validation on train set
+  4. Tune hyperparameters on validation set
+  5. Final evaluation on test set (NEVER seen during training or tuning)
+  6. Walk-forward validation: 12 monthly segments, train on prior data, test
+     on next month. Average performance across all 12 segments.
+  7. Pass criteria: test set accuracy > 55%, profit factor > 1.3,
+     Sharpe > 0.8, AND walk-forward Sharpe > 0.5
+  8. If passes: deploy new model (save old model as backup)
+  9. If fails: keep old model, log failure, alert for manual investigation
+- LSTM retrained on same schedule, same split, same criteria
+
+8.4 ON-CHAIN DATA CACHING
+
+- Cache all on-chain metrics locally with timestamps
+- If an API fails: use cached data (forward-fill)
+- Maximum forward-fill duration before marking as stale: 72 hours
+- If Glassnode is down for > 72 hours: reduce on-chain feature weight in
+  the ensemble by excluding them (model operates on technical + derivatives
+  + sentiment features only)
+
+8.5 HEARTBEAT, MEMORY, LOGS
+Same as previous strategies with strategy ID STRAT-010.
+
+Additional monitoring:
+- Model inference latency: log time per prediction (target: < 500ms)
+- Feature calculation latency: log time per feature engineering cycle
+- Memory: ML models can consume significant memory. Monitor and restart
+  if memory exceeds 1.5GB (model + feature history + data buffers)
+
+================================================================================
+SECTION 9: PAPER TRADING SPECIFICATIONS
+================================================================================
+
+9.1 FILL SIMULATION
+Same as STRAT-001 Section 9.1
+
+9.2 MODEL EVALUATION IN PAPER TRADING
+
+- Track model predictions vs actual outcomes (4-hour forward returns)
+- Calculate: accuracy, precision, recall, F1 score, AUC-ROC
+- If AUC-ROC < 0.55 during paper trading: the model has no edge, do NOT
+  go live
+
+9.3 WALK-FORWARD VALIDATION DURING PAPER TRADING
+
+- Every 7 days of paper trading, run a mini walk-forward test:
+  Train on all historical data up to 7 days ago
+  Test on the most recent 7 days
+  Compare paper trading predictions vs walk-forward predictions
+  If they diverge significantly: model may be deteriorating
+
+9.4 GO-LIVE CRITERIA (90-day minimum)
+
+- Minimum 80 completed trades in paper
+- Net positive PnL after simulated fees
+- Win rate > 50%
+- Profit factor > 1.2
+- Sharpe ratio > 0.7
+- Maximum drawdown < 10%
+- Model accuracy > 55% on directional prediction
+- AUC-ROC > 0.58 (better than random)
+- Walk-forward validation: positive performance in at least 8 of 12 months
+- Feature importance: no single feature accounts for > 30% of model's
+  predictive power (avoids over-reliance on one input)
+- Monte Carlo analysis: 95th percentile of randomly shuffled trade sequences
+  is still profitable
+
+================================================================================
+SECTION 10: PERFORMANCE METRICS
+================================================================================
+
+10.1 STANDARD METRICS — Same as STRAT-001
+
+10.2 MODEL-SPECIFIC METRICS
+
+- Model Accuracy: percentage of correct directional predictions
+- AUC-ROC: Area Under ROC Curve (model discrimination ability)
+- Precision/Recall: for LONG and SHORT signals separately
+- Brier Score: calibration of probability estimates
+- Feature Importance Rankings: top 10 features driving predictions (tracked
+  monthly — changes indicate regime shifts)
+- Prediction Distribution: histogram of P_final values (should not cluster
+  around 0.5 if model has edge)
+- Confidence vs Accuracy: do high-confidence predictions actually win more?
+  (If not, the confidence-based sizing is misguided)
+- Data Source Attribution: performance with vs without on-chain features,
+  with vs without sentiment features (which data sources add value?)
+- Model Staleness Metric: rolling accuracy degradation over time since last
+  retrain (quantifies concept drift)
+- Ensemble Agreement: how often do XGBoost and LSTM agree? What is the
+  performance when they agree vs disagree?
+
+10.3 ON-CHAIN SIGNAL ANALYSIS
+
+- Exchange Flow Signal Accuracy: when exchange flows predicted direction,
+  was the trade profitable?
+- MVRV Signal Accuracy: same analysis
+- Each on-chain metric's individual predictive value, tracked over time
+- This analysis feeds back into feature selection for the next model retrain
+
+================================================================================
+SECTION 11: EDGE CASES & FAILURE MODES
+================================================================================
+
+11.1 MODEL OVERFITTING DETECTED IN LIVE TRADING
+- If live accuracy drops below 50% for 50+ trades but backtest showed > 60%:
+  classic overfitting
+- Response: HALT immediately. Do NOT try to "fix" the model in production.
+  Retrain with stricter regularization, smaller feature set, and more
+  aggressive walk-forward validation.
+- Prevention: the 90-day paper trading period should catch this BEFORE live
+
+11.2 ON-CHAIN DATA LAG
+- On-chain data can be 1-24 hours delayed (blockchain confirmation times)
+- The model must be trained with this lag baked in (features at time T use
+  on-chain data available at time T, which may reflect conditions at T-6h)
+- If real-time and on-chain signals conflict: weight technical/order book
+  features higher (they are more timely)
+
+11.3 SENTIMENT MANIPULATION
+- Social sentiment metrics are susceptible to manipulation (bot farms, paid
+  shills, coordinated FUD)
+- Sentiment features should NEVER dominate the model (maximum 10% feature
+  importance weight)
+- If sentiment diverges dramatically from on-chain reality (extreme bullish
+  sentiment but massive exchange inflows): trust on-chain over sentiment
+
+11.4 REGIME CHANGE (BLACK SWAN)
+- If an unprecedented event occurs (regulatory ban, major hack, etc.),
+  ALL historical patterns may become invalid
+- The model has NO ability to handle truly unprecedented events
+- Circuit breakers (Section 5.6) provide protection
+- After a black swan: halt the strategy for 30 days, retrain on data that
+  includes the new regime
+
+11.5 FEATURE ENGINEERING BUG
+- A bug in feature calculation can silently corrupt model inputs, leading
+  to garbage predictions that APPEAR valid (probability between 0 and 1)
+- SAFEGUARD: implement range checks on all features:
+  RSI must be 0-100
+  Z-scored features should be between −5 and +5 (flag outliers)
+  Volume ratios must be > 0
+  If any feature is out of range: log, alert, and use the model's NaN handling
+- Weekly audit: manually verify a sample of feature calculations against
+  raw data
+
+11.6 CATASTROPHIC MODEL FAILURE
+- If the model file is corrupted, incompatible with the runtime, or
+  produces consistently NaN outputs:
+  Fallback: use a SIMPLE rule-based system (RSI + MACD crossover) as
+  temporary replacement until the ML model is restored
+  Alert: CRITICAL level, model needs immediate attention
+  The rule-based fallback is NOT a permanent solution — it exists only
+  to prevent the strategy from going completely dark
+
+11.7 GPU/COMPUTE RESOURCE EXHAUSTION
+- If LSTM inference requires GPU and GPU memory is exhausted:
+  Fall back to CPU inference (slower but functional)
+  If CPU inference exceeds 5-second timeout: skip LSTM, use XGBoost only
+  (set ensemble weight to 100% XGBoost temporarily)
+- Monitor inference latency continuously
+
+================================================================================
+SECTION 12: DEPENDENCIES & INTEGRATION POINTS
+================================================================================
+
+12.1 UNIFIED WEBSOCKET MANAGER
+Strategy ID: STRAT-010
+33 streams — moderate consumption
+Normal priority for message delivery
+
+12.2 CENTRALIZED RATE LIMIT MANAGER
+Budget: 200 weight/minute (moderate — heavy on startup for data warm-up)
+Startup burst: 500 weight for 5 minutes
+Order priority: NORMAL for entries, CRITICAL for stop losses
+
+12.3 SHARED RISK MANAGER
+Reports: position direction, size, model confidence, current prediction
+Cross-strategy: model predictions should be shared with the risk manager
+so it can detect when multiple strategies are aligned (concentration risk)
+or diversified (healthy)
+
+12.4 EXTERNAL DEPENDENCIES (MULTIPLE)
+
+Glassnode API:
+- Required for on-chain features (25-30)
+- Paid subscription ($29+/month for basic, $799+/month for professional)
+- Rate limits: typically 10 requests/minute
+- Failure handling: cache last known values, degrade gracefully
+
+CryptoQuant API (alternative/supplement to Glassnode):
+- Additional on-chain metrics
+- Used as backup if Glassnode is unavailable
+
+Social Sentiment API (CryptoCompare/LunarCrush):
+- Sentiment features (31-32)
+- Failure handling: exclude sentiment features from model
+
+Binance Derivatives Data:
+- Features 18-24 from Binance REST API (no external dependency)
+
+Total external dependencies: 3 services. Strategy MUST function with
+reduced capability if any or all are unavailable. Minimum viable feature
+set: technical features only (1-14) + order book features (15-17) +
+derivatives features (18-24) = 24 features minimum.
+
+12.5 COMPUTATIONAL REQUIREMENTS
+
+- ML model inference: XGBoost < 100ms, LSTM < 500ms per prediction
+- Feature engineering: < 2 seconds per instrument per hourly cycle
+- Model retraining: 30-120 minutes (OFFLINE, not during trading)
+- Memory: model files approximately 50-200MB depending on complexity
+- Storage: feature history approximately 10MB per day per instrument
+  (retained for 365 days for retraining = ~10GB total)
+
+12.6 MODEL FILE MANAGEMENT
+
+- Current model: loaded into memory at startup
+- Previous model: retained as backup (automatic rollback if current fails)
+- Model versioning: each model has a version string, training date, and
+  validation metrics stored alongside
+- Model deployment: copy new model file to designated path, signal the
+  strategy to reload (no restart required — hot model swapping)
+- Model storage: on disk with redundant backup
+
+12.7 DATABASE
+
+Same as STRAT-001 plus:
+- Model predictions table: timestamp, instrument, P_xgboost, P_lstm, P_final,
+  feature_importance_top5, signal_generated, actual_outcome_4h
+- Feature snapshots: hourly feature vectors (compressed) for retraining
+- Model performance tracking: rolling accuracy, Sharpe, AUC-ROC per model version
+- Retraining log: training date, dataset size, validation metrics, pass/fail,
+  deployment decision
+
+12.8 DASHBOARD
+
+- Model performance dashboard: accuracy gauge, prediction distribution chart,
+  feature importance bar chart, confidence vs outcome scatter plot
+- On-chain metrics display: current values of key on-chain features with
+  historical context (percentile rank)
+- Prediction timeline: historical predictions overlaid on price chart
+  (color-coded by correctness)
+- Model health: version, age, last retrain date, accuracy trend
+- Data source health: status of each external API (connected/degraded/failed)
+
+================================================================================
+END OF DOCUMENT
+================================================================================
