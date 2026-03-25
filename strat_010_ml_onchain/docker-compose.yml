@@ -8,7 +8,7 @@ services:
     container_name: strat-010-ml-onchain
     restart: unless-stopped
     ports:
-      - "8089:8089"
+      - "8090:8090"
     volumes:
       - ./data:/app/strat_010_ml_onchain/data
       - ./models:/app/strat_010_ml_onchain/models
@@ -26,9 +26,16 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    networks:
+      - stratlab
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8089/health'); r.raise_for_status()"]
+      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8090/health'); r.raise_for_status()"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 120s
+
+networks:
+  stratlab:
+    external: true
+    name: stratlab

@@ -52,6 +52,13 @@ services:
         reservations:
           memory: 256M
           cpus: "0.25"
+    networks:
+      - stratlab
+
+networks:
+  stratlab:
+    external: true
+    name: stratlab
 
 volumes:
   shared-state:

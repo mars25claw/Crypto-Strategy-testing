@@ -44,7 +44,7 @@ risk:
 
 paper_trading:
   enabled: true
-  starting_equity: 10000.0
+  starting_equity: 800.0
   maker_fee_pct: 0.02
   taker_fee_pct: 0.04
   spot_taker_fee_pct: 0.10

@@ -10,13 +10,13 @@ services:
     env_file:
       - .env
     ports:
-      - "8089:8080"
+      - "8089:8089"
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
       - ./templates:/app/templates:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8080/health'); r.raise_for_status()"]
+      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8089/health'); r.raise_for_status()"]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -30,3 +30,10 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+    networks:
+      - stratlab
+
+networks:
+  stratlab:
+    external: true
+    name: stratlab

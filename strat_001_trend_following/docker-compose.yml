@@ -31,9 +31,9 @@ services:
           memory: 256M
           cpus: "0.5"
     networks:
-      - trading-net
+      - stratlab
 
 networks:
-  trading-net:
+  stratlab:
     external: true
-    name: trading-net
+    name: stratlab

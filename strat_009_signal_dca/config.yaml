@@ -39,7 +39,7 @@ risk:
 # --- Paper Trading ---
 paper_trading:
   enabled: true
-  starting_equity: 10000.0
+  starting_equity: 800.0
   maker_fee_pct: 0.10
   taker_fee_pct: 0.10
   slippage_model: "fixed"
@@ -47,7 +47,7 @@ paper_trading:
 # --- Dashboard ---
 dashboard:
   host: "0.0.0.0"
-  port: 8080
+  port: 8089
   enable_kill_switch: true
 
 # --- Alerting ---

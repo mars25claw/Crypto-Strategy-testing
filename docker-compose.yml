@@ -1,0 +1,292 @@
+# =============================================================================
+# Crypto Strategy Lab — Root Orchestration
+# =============================================================================
+# Usage:
+#   cp .env.example .env   # fill in secrets
+#   docker compose up -d   # start everything
+#   docker compose logs -f aggregator discord_bot  # watch control plane
+# =============================================================================
+
+version: "3.9"
+
+x-common: &common
+  restart: unless-stopped
+  env_file:
+    - .env
+  environment:
+    - TZ=UTC
+    - BOT_MODE=${BOT_MODE:-paper}
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "5"
+  networks:
+    - stratlab
+
+services:
+  # ── Strategy Containers ───────────────────────────────────────────────────
+
+  strat-001-trend-following:
+    <<: *common
+    build:
+      context: .
+      dockerfile: strat_001_trend_following/Dockerfile
+    container_name: strat-001-trend-following
+    ports:
+      - "8081:8081"
+    volumes:
+      - strat_001_data:/app/strat_001/data
+      - ./strat_001_trend_following/config.yaml:/app/strat_001/config.yaml:ro
+      - ./shared:/app/shared:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  strat-002-funding-arb:
+    <<: *common
+    build:
+      context: .
+      dockerfile: strat_002_funding_arb/Dockerfile
+    container_name: strat-002-funding-arb
+    ports:
+      - "8082:8082"
+    volumes:
+      - strat_002_data:/app/strat_002/data
+      - ./strat_002_funding_arb/config.yaml:/app/strat_002/config.yaml:ro
+      - ./shared:/app/shared:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  strat-003-stat-arb-pairs:
+    <<: *common
+    build:
+      context: .
+      dockerfile: strat_003_stat_arb_pairs/Dockerfile
+    container_name: strat-003-stat-arb-pairs
+    ports:
+      - "8083:8083"
+    volumes:
+      - strat_003_data:/app/strat_003/data
+      - ./strat_003_stat_arb_pairs/config.yaml:/app/strat_003/config.yaml:ro
+      - ./shared:/app/shared:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  strat-004-mean-reversion:
+    <<: *common
+    build:
+      context: .
+      dockerfile: strat_004_mean_reversion/Dockerfile
+    container_name: strat-004-mean-reversion
+    ports:
+      - "8084:8084"
+    volumes:
+      - strat_004_data:/app/strat_004/data
+      - ./strat_004_mean_reversion/config.yaml:/app/strat_004/config.yaml:ro
+      - ./shared:/app/shared:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8084/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  strat-005-grid-trading:
+    <<: *common
+    build:
+      context: .
+      dockerfile: strat_005_grid_trading/Dockerfile
+    container_name: strat-005-grid-trading
+    ports:
+      - "8085:8085"
+    volumes:
+      - strat_005_data:/app/strat_005/data
+      - ./strat_005_grid_trading/config.yaml:/app/strat_005/config.yaml:ro
+      - ./shared:/app/shared:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8085/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  strat-006-market-making:
+    <<: *common
+    build:
+      context: .
+      dockerfile: strat_006_market_making/Dockerfile
+    container_name: strat-006-market-making
+    ports:
+      - "8086:8086"
+    volumes:
+      - strat_006_data:/app/strat_006/data
+      - ./strat_006_market_making/config.yaml:/app/strat_006/config.yaml:ro
+      - ./shared:/app/shared:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8086/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  strat-007-triangular-arb:
+    <<: *common
+    build:
+      context: .
+      dockerfile: strat_007_triangular_arb/Dockerfile
+    container_name: strat-007-triangular-arb
+    ports:
+      - "8087:8087"
+    volumes:
+      - strat_007_data:/app/strat_007/data
+      - ./strat_007_triangular_arb/config.yaml:/app/strat_007/config.yaml:ro
+      - ./shared:/app/shared:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8087/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  strat-008-options-vol:
+    <<: *common
+    build:
+      context: .
+      dockerfile: strat_008_options_volatility/Dockerfile
+    container_name: strat-008-options-vol
+    ports:
+      - "8088:8088"
+    volumes:
+      - strat_008_data:/app/strat_008/data
+      - ./strat_008_options_volatility/config.yaml:/app/strat_008/config.yaml:ro
+      - ./shared:/app/shared:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8088/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  strat-009-signal-dca:
+    <<: *common
+    build:
+      context: .
+      dockerfile: strat_009_signal_dca/Dockerfile
+    container_name: strat-009-signal-dca
+    ports:
+      - "8089:8089"
+    volumes:
+      - strat_009_data:/app/strat_009/data
+      - ./strat_009_signal_dca/config.yaml:/app/strat_009/config.yaml:ro
+      - ./shared:/app/shared:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8089/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  strat-010-ml-onchain:
+    <<: *common
+    build:
+      context: .
+      dockerfile: strat_010_ml_onchain/Dockerfile
+    container_name: strat-010-ml-onchain
+    ports:
+      - "8090:8090"
+    volumes:
+      - strat_010_data:/app/strat_010/data
+      - ./strat_010_ml_onchain/config.yaml:/app/strat_010/config.yaml:ro
+      - ./shared:/app/shared:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/api/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  # ── Control Plane ─────────────────────────────────────────────────────────
+
+  aggregator:
+    <<: *common
+    build:
+      context: ./aggregator
+      dockerfile: Dockerfile
+    container_name: aggregator
+    ports:
+      - "8099:8099"
+    depends_on:
+      - strat-001-trend-following
+      - strat-002-funding-arb
+      - strat-003-stat-arb-pairs
+      - strat-004-mean-reversion
+      - strat-005-grid-trading
+      - strat-006-market-making
+      - strat-007-triangular-arb
+      - strat-008-options-vol
+      - strat-009-signal-dca
+      - strat-010-ml-onchain
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8099/api/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  discord_bot:
+    <<: *common
+    build:
+      context: ./discord_bot
+      dockerfile: Dockerfile
+    container_name: discord_bot
+    depends_on:
+      - aggregator
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+# ── Networks ──────────────────────────────────────────────────────────────
+
+networks:
+  stratlab:
+    name: stratlab
+    driver: bridge
+
+# ── Volumes ───────────────────────────────────────────────────────────────
+
+volumes:
+  strat_001_data:
+    name: stratlab_strat_001_data
+  strat_002_data:
+    name: stratlab_strat_002_data
+  strat_003_data:
+    name: stratlab_strat_003_data
+  strat_004_data:
+    name: stratlab_strat_004_data
+  strat_005_data:
+    name: stratlab_strat_005_data
+  strat_006_data:
+    name: stratlab_strat_006_data
+  strat_007_data:
+    name: stratlab_strat_007_data
+  strat_008_data:
+    name: stratlab_strat_008_data
+  strat_009_data:
+    name: stratlab_strat_009_data
+  strat_010_data:
+    name: stratlab_strat_010_data

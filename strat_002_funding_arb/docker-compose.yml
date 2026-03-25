@@ -34,3 +34,10 @@ services:
         limits:
           memory: 1G
           cpus: "1.0"
+    networks:
+      - stratlab
+
+networks:
+  stratlab:
+    external: true
+    name: stratlab

@@ -38,18 +38,19 @@ risk:
 
 paper_trading:
   enabled: true
-  starting_equity: 10000.0
+  starting_equity: 800.0
   maker_fee_pct: 0.02
   taker_fee_pct: 0.04
   slippage_model: "orderbook_walk"
 
 dashboard:
   host: "0.0.0.0"
-  port: 8089
+  port: 8090
   enable_kill_switch: true
 
 alerting:
   enabled: true
+  discord_webhook_url: ""
 
 database:
   url: "sqlite:///data/strat010.db"

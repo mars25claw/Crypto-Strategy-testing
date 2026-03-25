@@ -24,11 +24,11 @@ COPY config.yaml /app/config.yaml
 RUN mkdir -p /app/data/logs /app/data/state
 
 # Expose dashboard port
-EXPOSE 8080
+EXPOSE 8089
 
 # Health check
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import httpx; r = httpx.get('http://localhost:8080/health'); r.raise_for_status()" || exit 1
+    CMD python -c "import httpx; r = httpx.get('http://localhost:8089/health'); r.raise_for_status()" || exit 1
 
 # Environment
 ENV PYTHONUNBUFFERED=1
