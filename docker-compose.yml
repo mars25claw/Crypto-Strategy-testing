@@ -245,6 +245,28 @@ services:
       start_period: 10s
       retries: 3
 
+  dashboard:
+    <<: *common
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: dashboard
+    ports:
+      - "9000:9000"
+    environment:
+      - TZ=UTC
+      - BOT_MODE=${BOT_MODE:-paper}
+      - AGGREGATOR_URL=http://aggregator:8099
+      - AGGREGATOR_WS_URL=ws://aggregator:8099/ws
+    depends_on:
+      - aggregator
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/')"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
   discord_bot:
     <<: *common
     build:

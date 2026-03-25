@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crypto Strategy Lab</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#c9d1d9;--text-dim:#8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922;--font:'Segoe UI',system-ui,-apple-system,sans-serif;--mono:'SF Mono','Cascadia Code','Consolas',monospace}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5;overflow-x:hidden}
+a{color:var(--accent);text-decoration:none}
+
+/* Header */
+.header{background:#010409;border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;position:sticky;top:0;z-index:100}
+.header-left{display:flex;align-items:center;gap:16px}
+.logo{font-size:18px;font-weight:700;letter-spacing:1px;color:#fff}
+.header-stat{display:flex;flex-direction:column;align-items:flex-start;padding:0 16px;border-left:1px solid var(--border)}
+.header-stat .label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim)}
+.header-stat .value{font-size:16px;font-weight:600;font-family:var(--mono)}
+.header-right{display:flex;align-items:center;gap:16px}
+.prices{font-family:var(--mono);font-size:12px;color:var(--text-dim)}
+.status-badge{display:flex;align-items:center;gap:6px;font-size:13px}
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.dot-green{background:var(--green)}
+.dot-yellow{background:var(--yellow)}
+.dot-red{background:var(--red)}
+.timestamp{font-family:var(--mono);font-size:11px;color:var(--text-dim)}
+
+/* Layout */
+.container{max-width:1600px;margin:0 auto;padding:16px 24px}
+.section{margin-bottom:20px}
+.section-title{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-dim);margin-bottom:10px;font-weight:600}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;overflow:hidden}
+
+/* Equity curve */
+.chart-container{position:relative;height:280px}
+
+/* Leaderboard table */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px;font-family:var(--mono)}
+th{text-align:left;padding:8px 12px;border-bottom:2px solid var(--border);color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:1px;cursor:pointer;user-select:none;white-space:nowrap}
+th:hover{color:var(--accent)}
+th .sort-arrow{margin-left:4px;font-size:9px}
+td{padding:8px 12px;border-bottom:1px solid var(--border);white-space:nowrap}
+tr.row-positive{background:rgba(63,185,80,0.06)}
+tr.row-negative{background:rgba(248,81,73,0.06)}
+tr.row-offline{background:rgba(139,148,158,0.06);opacity:0.6}
+tr:hover{background:rgba(88,166,255,0.08)}
+.pnl-pos{color:var(--green)}
+.pnl-neg{color:var(--red)}
+.status-pill{padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.pill-online{background:rgba(63,185,80,0.15);color:var(--green)}
+.pill-offline{background:rgba(139,148,158,0.15);color:var(--text-dim)}
+.pill-crashed{background:rgba(248,81,73,0.15);color:var(--red)}
+
+/* Two column */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.sparkline-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.sparkline-card{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 10px}
+.sparkline-label{font-size:11px;color:var(--text-dim);margin-bottom:4px;display:flex;justify-content:space-between}
+.sparkline-chart{height:50px;position:relative}
+
+/* Stats cards */
+.stats-row{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px 16px;text-align:center}
+.stat-card .stat-icon{font-size:20px;margin-bottom:4px}
+.stat-card .stat-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim)}
+.stat-card .stat-value{font-size:20px;font-weight:700;font-family:var(--mono);margin-top:2px}
+.stat-card .stat-sub{font-size:11px;color:var(--text-dim);margin-top:2px}
+
+/* Trade feed */
+.trade-feed{max-height:360px;overflow-y:auto}
+.trade-feed::-webkit-scrollbar{width:6px}
+.trade-feed::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* Responsive */
+@media(max-width:1200px){.two-col{grid-template-columns:1fr}.stats-row{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:768px){.stats-row{grid-template-columns:repeat(2,1fr)}.header{flex-direction:column;align-items:flex-start}}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+  <div class="header-left">
+    <div class="logo">&#129514; CRYPTO STRATEGY LAB</div>
+    <div class="header-stat">
+      <span class="label">Portfolio</span>
+      <span class="value" id="hdr-equity">$8,000.00</span>
+    </div>
+    <div class="header-stat">
+      <span class="label">Total P&amp;L</span>
+      <span class="value" id="hdr-pnl">$0.00 (0.00%)</span>
+    </div>
+  </div>
+  <div class="header-right">
+    <span class="prices" id="hdr-prices">BTC --- | ETH --- | SOL ---</span>
+    <span class="status-badge">
+      <span class="status-dot dot-green" id="hdr-dot"></span>
+      <span id="hdr-status">0/10 running</span>
+    </span>
+    <span class="timestamp" id="hdr-time">--:--:--</span>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Section 1: Combined Equity Curve -->
+  <div class="section">
+    <div class="section-title">Combined Equity Curve</div>
+    <div class="card">
+      <div class="chart-container">
+        <canvas id="equityCurveChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section 2: Strategy Leaderboard -->
+  <div class="section">
+    <div class="section-title">Strategy Leaderboard</div>
+    <div class="card table-wrap">
+      <table id="leaderboard">
+        <thead>
+          <tr>
+            <th data-col="rank">Rank <span class="sort-arrow"></span></th>
+            <th data-col="strategy_name">Strategy <span class="sort-arrow"></span></th>
+            <th data-col="type">Type <span class="sort-arrow"></span></th>
+            <th data-col="status">Status <span class="sort-arrow"></span></th>
+            <th data-col="equity">Equity <span class="sort-arrow"></span></th>
+            <th data-col="pnl">P&amp;L $ <span class="sort-arrow"></span></th>
+            <th data-col="pnl_pct">P&amp;L % <span class="sort-arrow"></span></th>
+            <th data-col="today_pct">Today % <span class="sort-arrow"></span></th>
+            <th data-col="trade_count">Trades <span class="sort-arrow"></span></th>
+            <th data-col="win_rate">Win Rate <span class="sort-arrow"></span></th>
+            <th data-col="sharpe_ratio">Sharpe <span class="sort-arrow"></span></th>
+            <th data-col="max_drawdown">Max DD <span class="sort-arrow"></span></th>
+            <th data-col="last_updated">Last Trade <span class="sort-arrow"></span></th>
+          </tr>
+        </thead>
+        <tbody id="lb-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Section 3: Two columns -->
+  <div class="section two-col">
+    <div>
+      <div class="section-title">Individual Equity Curves</div>
+      <div class="card">
+        <div class="sparkline-grid" id="sparklines"></div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">Performance Comparison</div>
+      <div class="card">
+        <div class="chart-container" style="height:360px">
+          <canvas id="perfBarChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section 4: Stats Cards -->
+  <div class="section">
+    <div class="section-title">Portfolio Stats</div>
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-icon">&#127942;</div>
+        <div class="stat-label">Best Strategy</div>
+        <div class="stat-value pnl-pos" id="stat-best-val">--</div>
+        <div class="stat-sub" id="stat-best-name">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">&#128128;</div>
+        <div class="stat-label">Worst Strategy</div>
+        <div class="stat-value pnl-neg" id="stat-worst-val">--</div>
+        <div class="stat-sub" id="stat-worst-name">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">&#128202;</div>
+        <div class="stat-label">Total Trades</div>
+        <div class="stat-value" id="stat-trades">0</div>
+        <div class="stat-sub">across all strategies</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">&#9989;</div>
+        <div class="stat-label">Avg Win Rate</div>
+        <div class="stat-value" id="stat-winrate">0%</div>
+        <div class="stat-sub">all strategies</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">&#128208;</div>
+        <div class="stat-label">Best Sharpe</div>
+        <div class="stat-value" id="stat-sharpe">0.00</div>
+        <div class="stat-sub" id="stat-sharpe-name">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">&#9201;</div>
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value" id="stat-uptime">0h</div>
+        <div class="stat-sub">since start</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section 5: Recent Trade Feed -->
+  <div class="section">
+    <div class="section-title">Recent Trade Feed</div>
+    <div class="card trade-feed">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Strategy</th>
+            <th>Pair</th>
+            <th>Side</th>
+            <th>P&amp;L</th>
+            <th>Running Equity</th>
+          </tr>
+        </thead>
+        <tbody id="trade-feed-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── Constants & State ──────────────────────────────────────────────────
+const STRATEGY_TYPES = {
+  'STRAT-001':'Trend Following','STRAT-002':'Funding Arb','STRAT-003':'Stat Arb Pairs',
+  'STRAT-004':'Mean Reversion','STRAT-005':'Grid Trading','STRAT-006':'Market Making',
+  'STRAT-007':'Triangular Arb','STRAT-008':'Options Vol','STRAT-009':'Signal DCA',
+  'STRAT-010':'ML On-Chain'
+};
+const SHORT_NAMES = {
+  'STRAT-001':'Trend','STRAT-002':'Fund','STRAT-003':'Stat',
+  'STRAT-004':'MRev','STRAT-005':'Grid','STRAT-006':'MM',
+  'STRAT-007':'TriArb','STRAT-008':'Opts','STRAT-009':'DCA',
+  'STRAT-010':'ML'
+};
+const START_EQUITY = 800;
+const TOTAL_START = 8000;
+const startTime = Date.now();
+
+let currentData = [];
+let sortCol = 'rank';
+let sortAsc = true;
+let equityHistory = [];  // [{ts, value}]
+let strategyEquityHistory = {}; // {id: [{ts, value}]}
+let tradeFeed = [];
+let sparkCharts = {};
+let prevEquities = {};
+
+// ── Chart.js Setup ─────────────────────────────────────────────────────
+Chart.defaults.color = '#8b949e';
+Chart.defaults.borderColor = '#30363d';
+Chart.defaults.font.family = "'SF Mono','Consolas',monospace";
+Chart.defaults.font.size = 11;
+
+// Equity curve chart
+const eqCtx = document.getElementById('equityCurveChart').getContext('2d');
+const equityCurveChart = new Chart(eqCtx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      label: 'Portfolio Equity',
+      data: [],
+      borderColor: '#58a6ff',
+      backgroundColor: 'rgba(88,166,255,0.08)',
+      borderWidth: 2,
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+      pointHitRadius: 8
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { intersect: false, mode: 'index' },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: ctx => '$' + ctx.parsed.y.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})
+        }
+      }
+    },
+    scales: {
+      x: {
+        grid: { display: false },
+        ticks: { maxTicksLimit: 12, maxRotation: 0 }
+      },
+      y: {
+        grid: { color: 'rgba(48,54,61,0.5)' },
+        ticks: {
+          callback: v => '$' + v.toLocaleString()
+        }
+      }
+    }
+  }
+});
+
+// Performance bar chart
+const barCtx = document.getElementById('perfBarChart').getContext('2d');
+const perfBarChart = new Chart(barCtx, {
+  type: 'bar',
+  data: {
+    labels: [],
+    datasets: [{
+      label: 'P&L %',
+      data: [],
+      backgroundColor: [],
+      borderRadius: 4,
+      barThickness: 22
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: ctx => ctx.parsed.x.toFixed(2) + '%'
+        }
+      }
+    },
+    scales: {
+      x: {
+        grid: { color: 'rgba(48,54,61,0.5)' },
+        ticks: { callback: v => v + '%' }
+      },
+      y: {
+        grid: { display: false }
+      }
+    }
+  }
+});
+
+// ── Formatting Helpers ─────────────────────────────────────────────────
+function fmtUSD(v) { return '$' + Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmtPct(v) { return v.toFixed(2) + '%'; }
+function fmtTime(ts) {
+  if (!ts) return '--';
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString('en-US', {hour12:false});
+}
+function pnlClass(v) { return v >= 0 ? 'pnl-pos' : 'pnl-neg'; }
+function pnlSign(v) { return v >= 0 ? '+' : '-'; }
+function statusPill(s) {
+  const cls = (s === 'running' || s === 'online') ? 'pill-online' : s === 'crashed' ? 'pill-crashed' : 'pill-offline';
+  return `<span class="status-pill ${cls}">${s}</span>`;
+}
+function isOnline(s) { return s === 'running' || s === 'online'; }
+
+// ── Header Update ──────────────────────────────────────────────────────
+function updateHeader(data) {
+  const totalEquity = data.reduce((s, d) => s + d.equity, 0);
+  const totalPnl = data.reduce((s, d) => s + d.pnl, 0);
+  const totalPnlPct = TOTAL_START > 0 ? ((totalEquity - TOTAL_START) / TOTAL_START) * 100 : 0;
+  const online = data.filter(d => isOnline(d.status)).length;
+
+  document.getElementById('hdr-equity').textContent = '$' + totalEquity.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  const pnlEl = document.getElementById('hdr-pnl');
+  pnlEl.textContent = `${pnlSign(totalPnl)}${fmtUSD(totalPnl)} (${pnlSign(totalPnlPct)}${Math.abs(totalPnlPct).toFixed(2)}%)`;
+  pnlEl.className = 'value ' + pnlClass(totalPnl);
+
+  document.getElementById('hdr-status').textContent = `${online}/10 running`;
+  const dot = document.getElementById('hdr-dot');
+  dot.className = 'status-dot ' + (online >= 8 ? 'dot-green' : online >= 4 ? 'dot-yellow' : 'dot-red');
+}
+
+// Clock
+setInterval(() => {
+  document.getElementById('hdr-time').textContent = new Date().toLocaleTimeString('en-US',{hour12:false});
+}, 1000);
+
+// ── Equity History ─────────────────────────────────────────────────────
+function recordEquity(data) {
+  const now = new Date();
+  const label = now.toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit'});
+  const totalEquity = data.reduce((s, d) => s + d.equity, 0);
+
+  equityHistory.push({ts: now, label, value: totalEquity});
+  // Keep last 24h (at 2s intervals = ~43200 points, cap at 2000 for performance)
+  if (equityHistory.length > 2000) equityHistory.shift();
+
+  // Per-strategy
+  for (const d of data) {
+    if (!strategyEquityHistory[d.strategy_id]) strategyEquityHistory[d.strategy_id] = [];
+    strategyEquityHistory[d.strategy_id].push({ts: now, value: d.equity});
+    if (strategyEquityHistory[d.strategy_id].length > 500) strategyEquityHistory[d.strategy_id].shift();
+  }
+
+  // Update combined chart
+  equityCurveChart.data.labels = equityHistory.map(e => e.label);
+  equityCurveChart.data.datasets[0].data = equityHistory.map(e => e.value);
+  equityCurveChart.update('none');
+}
+
+// ── Simulated Trade Feed ───────────────────────────────────────────────
+function detectTrades(data) {
+  for (const d of data) {
+    const prev = prevEquities[d.strategy_id];
+    if (prev !== undefined && d.trade_count > 0) {
+      const eqDiff = d.equity - prev;
+      if (Math.abs(eqDiff) > 0.01 && prev !== d.equity) {
+        tradeFeed.unshift({
+          time: new Date(),
+          strategy: d.strategy_name || d.strategy_id,
+          pair: 'BTC/USDT',
+          side: eqDiff >= 0 ? 'BUY' : 'SELL',
+          pnl: eqDiff,
+          equity: d.equity
+        });
+      }
+    }
+    prevEquities[d.strategy_id] = d.equity;
+  }
+  if (tradeFeed.length > 50) tradeFeed.length = 50;
+}
+
+// ── Leaderboard Rendering ──────────────────────────────────────────────
+function renderLeaderboard(data) {
+  const sorted = [...data].sort((a, b) => {
+    let va = a[sortCol], vb = b[sortCol];
+    if (sortCol === 'type') { va = STRATEGY_TYPES[a.strategy_id] || ''; vb = STRATEGY_TYPES[b.strategy_id] || ''; }
+    if (sortCol === 'today_pct') { va = a.pnl_pct; vb = b.pnl_pct; } // approximate
+    if (typeof va === 'string') return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+    return sortAsc ? va - vb : vb - va;
+  });
+
+  const tbody = document.getElementById('lb-body');
+  tbody.innerHTML = sorted.map(d => {
+    const rowClass = !isOnline(d.status) ? 'row-offline' : d.pnl >= 0 ? 'row-positive' : 'row-negative';
+    return `<tr class="${rowClass}">
+      <td>${d.rank}</td>
+      <td><strong>${d.strategy_name}</strong></td>
+      <td>${STRATEGY_TYPES[d.strategy_id] || '--'}</td>
+      <td>${statusPill(d.status)}</td>
+      <td>${fmtUSD(d.equity)}</td>
+      <td class="${pnlClass(d.pnl)}">${pnlSign(d.pnl)}${fmtUSD(d.pnl)}</td>
+      <td class="${pnlClass(d.pnl_pct)}">${pnlSign(d.pnl_pct)}${fmtPct(Math.abs(d.pnl_pct))}</td>
+      <td class="${pnlClass(d.pnl_pct)}">${pnlSign(d.pnl_pct)}${fmtPct(Math.abs(d.pnl_pct))}</td>
+      <td>${d.trade_count}</td>
+      <td>${fmtPct(d.win_rate)}</td>
+      <td>${d.sharpe_ratio.toFixed(2)}</td>
+      <td class="pnl-neg">${fmtPct(d.max_drawdown)}</td>
+      <td>${fmtTime(d.last_updated)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// Sortable headers
+document.querySelectorAll('#leaderboard th').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) sortAsc = !sortAsc;
+    else { sortCol = col; sortAsc = col === 'rank'; }
+    // Update arrows
+    document.querySelectorAll('#leaderboard th .sort-arrow').forEach(a => a.textContent = '');
+    th.querySelector('.sort-arrow').textContent = sortAsc ? ' \u25B2' : ' \u25BC';
+    renderLeaderboard(currentData);
+  });
+});
+
+// ── Performance Bar Chart ──────────────────────────────────────────────
+function updatePerfBar(data) {
+  const sorted = [...data].sort((a, b) => a.pnl_pct - b.pnl_pct);
+  perfBarChart.data.labels = sorted.map(d => SHORT_NAMES[d.strategy_id] || d.strategy_id);
+  perfBarChart.data.datasets[0].data = sorted.map(d => d.pnl_pct);
+  perfBarChart.data.datasets[0].backgroundColor = sorted.map(d => d.pnl_pct >= 0 ? 'rgba(63,185,80,0.7)' : 'rgba(248,81,73,0.7)');
+  perfBarChart.update('none');
+}
+
+// ── Sparklines ─────────────────────────────────────────────────────────
+function updateSparklines(data) {
+  const container = document.getElementById('sparklines');
+  for (const d of data) {
+    const id = d.strategy_id;
+    const history = strategyEquityHistory[id] || [];
+    let cardEl = document.getElementById('spark-' + id);
+    if (!cardEl) {
+      cardEl = document.createElement('div');
+      cardEl.className = 'sparkline-card';
+      cardEl.id = 'spark-' + id;
+      cardEl.innerHTML = `
+        <div class="sparkline-label">
+          <span>${SHORT_NAMES[id] || id}</span>
+          <span class="spark-pnl" id="spark-pnl-${id}"></span>
+        </div>
+        <div class="sparkline-chart"><canvas id="spark-canvas-${id}"></canvas></div>`;
+      container.appendChild(cardEl);
+
+      const ctx = document.getElementById('spark-canvas-' + id).getContext('2d');
+      sparkCharts[id] = new Chart(ctx, {
+        type: 'line',
+        data: { labels: [], datasets: [{ data: [], borderColor: '#58a6ff', borderWidth: 1.5, fill: false, tension: 0.3, pointRadius: 0 }] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          scales: { x: { display: false }, y: { display: false } }
+        }
+      });
+    }
+
+    const pnlEl = document.getElementById('spark-pnl-' + id);
+    pnlEl.textContent = pnlSign(d.pnl_pct) + fmtPct(Math.abs(d.pnl_pct));
+    pnlEl.className = 'spark-pnl ' + pnlClass(d.pnl_pct);
+
+    const chart = sparkCharts[id];
+    if (chart && history.length > 0) {
+      chart.data.labels = history.map((_, i) => i);
+      chart.data.datasets[0].data = history.map(h => h.value);
+      chart.data.datasets[0].borderColor = d.pnl_pct >= 0 ? '#3fb950' : '#f85149';
+      chart.update('none');
+    }
+  }
+}
+
+// ── Stats Cards ────────────────────────────────────────────────────────
+function updateStats(data) {
+  const online = data.filter(d => isOnline(d.status));
+  const best = data.reduce((a, b) => a.pnl_pct > b.pnl_pct ? a : b, data[0]);
+  const worst = data.reduce((a, b) => a.pnl_pct < b.pnl_pct ? a : b, data[0]);
+  const totalTrades = data.reduce((s, d) => s + d.trade_count, 0);
+  const activeWithTrades = data.filter(d => d.trade_count > 0);
+  const avgWinRate = activeWithTrades.length > 0 ? activeWithTrades.reduce((s, d) => s + d.win_rate, 0) / activeWithTrades.length : 0;
+  const bestSharpe = data.reduce((a, b) => a.sharpe_ratio > b.sharpe_ratio ? a : b, data[0]);
+  const uptimeHrs = ((Date.now() - startTime) / 3600000).toFixed(1);
+
+  if (best) {
+    document.getElementById('stat-best-val').textContent = pnlSign(best.pnl_pct) + fmtPct(Math.abs(best.pnl_pct));
+    document.getElementById('stat-best-name').textContent = best.strategy_name;
+  }
+  if (worst) {
+    document.getElementById('stat-worst-val').textContent = pnlSign(worst.pnl_pct) + fmtPct(Math.abs(worst.pnl_pct));
+    document.getElementById('stat-worst-name').textContent = worst.strategy_name;
+  }
+  document.getElementById('stat-trades').textContent = totalTrades.toLocaleString();
+  document.getElementById('stat-winrate').textContent = fmtPct(avgWinRate);
+  if (bestSharpe) {
+    document.getElementById('stat-sharpe').textContent = bestSharpe.sharpe_ratio.toFixed(2);
+    document.getElementById('stat-sharpe-name').textContent = bestSharpe.strategy_name;
+  }
+  document.getElementById('stat-uptime').textContent = uptimeHrs + 'h';
+}
+
+// ── Trade Feed Rendering ───────────────────────────────────────────────
+function renderTradeFeed() {
+  const tbody = document.getElementById('trade-feed-body');
+  if (tradeFeed.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:24px">Waiting for trades...</td></tr>';
+    return;
+  }
+  tbody.innerHTML = tradeFeed.map(t => {
+    const cls = t.pnl >= 0 ? 'row-positive' : 'row-negative';
+    return `<tr class="${cls}">
+      <td>${t.time.toLocaleTimeString('en-US',{hour12:false})}</td>
+      <td>${t.strategy}</td>
+      <td>${t.pair}</td>
+      <td>${t.side}</td>
+      <td class="${pnlClass(t.pnl)}">${pnlSign(t.pnl)}${fmtUSD(t.pnl)}</td>
+      <td>${fmtUSD(t.equity)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Master Update ──────────────────────────────────────────────────────
+function processUpdate(data) {
+  if (!Array.isArray(data) || data.length === 0) return;
+  currentData = data;
+  updateHeader(data);
+  recordEquity(data);
+  renderLeaderboard(data);
+  updatePerfBar(data);
+  updateSparklines(data);
+  updateStats(data);
+  detectTrades(data);
+  renderTradeFeed();
+}
+
+// ── WebSocket Connection ───────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+  ws.onmessage = (evt) => {
+    try {
+      const data = JSON.parse(evt.data);
+      processUpdate(data);
+    } catch(e) { console.error('WS parse error', e); }
+  };
+
+  ws.onclose = () => {
+    console.log('WS closed, reconnecting in 3s');
+    setTimeout(connectWS, 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+// ── Initial Load ───────────────────────────────────────────────────────
+async function init() {
+  try {
+    const resp = await fetch('/api/data');
+    const json = await resp.json();
+    if (json.leaderboard) processUpdate(json.leaderboard);
+  } catch(e) { console.error('Initial fetch failed', e); }
+  connectWS();
+  renderTradeFeed();
+}
+
+init();
+</script>
+</body>
+</html>
