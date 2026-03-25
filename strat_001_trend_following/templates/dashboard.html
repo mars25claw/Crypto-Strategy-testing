@@ -1,0 +1,603 @@
+{% extends "base.html" %}
+
+{% block title %}STRAT-001 Trend Following & Momentum{% endblock %}
+
+{% block extra_head %}
+<style>
+    :root {
+        --bg-dark: #0d1117;
+        --bg-card: #161b22;
+        --bg-card-hover: #1c2333;
+        --border: #30363d;
+        --text-primary: #c9d1d9;
+        --text-secondary: #8b949e;
+        --green: #3fb950;
+        --red: #f85149;
+        --blue: #58a6ff;
+        --orange: #d29922;
+        --purple: #bc8cff;
+    }
+    body { background: var(--bg-dark); color: var(--text-primary); font-family: 'Inter', -apple-system, sans-serif; margin: 0; padding: 20px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+    .header h1 { font-size: 24px; font-weight: 600; margin: 0; }
+    .header .badge { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .badge-paper { background: var(--orange); color: #000; }
+    .badge-live { background: var(--green); color: #000; }
+    .grid { display: grid; gap: 16px; }
+    .grid-4 { grid-template-columns: repeat(4, 1fr); }
+    .grid-3 { grid-template-columns: repeat(3, 1fr); }
+    .grid-2 { grid-template-columns: repeat(2, 1fr); }
+    .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+    .card:hover { background: var(--bg-card-hover); }
+    .card-title { font-size: 12px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 8px; letter-spacing: 0.5px; }
+    .card-value { font-size: 28px; font-weight: 700; }
+    .card-value.positive { color: var(--green); }
+    .card-value.negative { color: var(--red); }
+    .section { margin-top: 24px; }
+    .section-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: var(--text-primary); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 8px 12px; color: var(--text-secondary); font-weight: 500; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+    td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+    tr:hover td { background: var(--bg-card-hover); }
+    .long { color: var(--green); }
+    .short { color: var(--red); }
+
+    /* ADX Gauge */
+    .adx-gauge { position: relative; width: 180px; height: 100px; margin: 0 auto; }
+    .gauge-value { text-align: center; font-size: 36px; font-weight: 700; margin-top: 8px; }
+    .gauge-label { text-align: center; font-size: 11px; color: var(--text-secondary); }
+    .gauge-weak { color: var(--orange); }
+    .gauge-strong { color: var(--green); }
+    .gauge-very-strong { color: var(--blue); }
+    .gauge-ranging { color: var(--red); }
+
+    /* Multi-TF Panel */
+    .tf-panel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .tf-cell { background: var(--bg-dark); border-radius: 6px; padding: 12px; text-align: center; }
+    .tf-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
+    .tf-bias { font-size: 14px; font-weight: 600; }
+    .bias-bullish { color: var(--green); }
+    .bias-bearish { color: var(--red); }
+    .bias-mixed { color: var(--orange); }
+
+    /* Indicator Row */
+    .ind-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+    .ind-item { background: var(--bg-dark); padding: 6px 10px; border-radius: 4px; font-size: 11px; }
+    .ind-label { color: var(--text-secondary); }
+    .ind-val { color: var(--text-primary); font-weight: 600; margin-left: 4px; }
+
+    /* Signal cards */
+    .signal-card { background: var(--bg-dark); border-radius: 6px; padding: 12px; margin-bottom: 8px; border-left: 3px solid; }
+    .signal-long { border-color: var(--green); }
+    .signal-short { border-color: var(--red); }
+
+    /* Criteria checklist */
+    .criteria-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; }
+    .criteria-check { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; }
+    .criteria-pass { background: var(--green); color: #000; }
+    .criteria-fail { background: var(--red); color: #fff; }
+
+    /* Kill switch */
+    .kill-btn { background: var(--red); color: #fff; border: none; padding: 8px 20px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .kill-btn:hover { opacity: 0.8; }
+
+    @media (max-width: 1200px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 768px) { .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="header">
+    <div>
+        <h1>STRAT-001 Trend Following & Momentum</h1>
+        <span style="color: var(--text-secondary); font-size: 13px;">EMA Crossover | Multi-TF Momentum | 4h Primary</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px;">
+        <span id="mode-badge" class="badge badge-paper">PAPER</span>
+        <span id="status-indicator" style="width: 10px; height: 10px; border-radius: 50%; background: var(--green); display: inline-block;"></span>
+        <button class="kill-btn" onclick="killSwitch()">KILL SWITCH</button>
+    </div>
+</div>
+
+<!-- Summary Cards -->
+<div class="grid grid-4">
+    <div class="card">
+        <div class="card-title">Total PnL</div>
+        <div class="card-value" id="total-pnl">$0.00</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Open Positions</div>
+        <div class="card-value" id="open-positions">0</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Win Rate</div>
+        <div class="card-value" id="win-rate">0%</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Max Drawdown</div>
+        <div class="card-value" id="max-dd">0%</div>
+    </div>
+</div>
+
+<!-- Second row of metrics -->
+<div class="grid grid-4" style="margin-top: 16px;">
+    <div class="card">
+        <div class="card-title">Profit Factor</div>
+        <div class="card-value" id="profit-factor">0.00</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Sharpe Ratio</div>
+        <div class="card-value" id="sharpe">0.00</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Avg R-Multiple</div>
+        <div class="card-value" id="avg-r">0.00R</div>
+    </div>
+    <div class="card">
+        <div class="card-title">Total Trades</div>
+        <div class="card-value" id="total-trades">0</div>
+    </div>
+</div>
+
+<!-- Main content grid -->
+<div class="grid grid-2 section">
+    <!-- EMA Chart -->
+    <div class="card" style="grid-column: span 2;">
+        <div class="card-title">EMA Crossover Chart</div>
+        <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+            <select id="chart-symbol" onchange="loadChart()" style="background: var(--bg-dark); color: var(--text-primary); border: 1px solid var(--border); padding: 4px 8px; border-radius: 4px; font-size: 12px;">
+            </select>
+            <span style="font-size: 11px; color: var(--text-secondary); padding-top: 6px;">
+                <span style="color: #f0b90b;">--- EMA20</span> &nbsp;
+                <span style="color: var(--blue);">--- EMA50</span> &nbsp;
+                <span style="color: var(--purple);">--- EMA200</span>
+            </span>
+        </div>
+        <canvas id="ema-chart" height="300"></canvas>
+    </div>
+</div>
+
+<div class="grid grid-3 section">
+    <!-- ADX Gauge -->
+    <div class="card">
+        <div class="card-title">ADX Trend Strength</div>
+        <div id="adx-gauge-container">
+            <div class="gauge-value gauge-ranging" id="adx-value">0</div>
+            <div class="gauge-label" id="adx-label">No Data</div>
+            <div class="ind-row" style="margin-top: 12px;">
+                <div class="ind-item"><span class="ind-label">+DI:</span><span class="ind-val long" id="plus-di">0</span></div>
+                <div class="ind-item"><span class="ind-label">-DI:</span><span class="ind-val short" id="minus-di">0</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Multi-TF Panel -->
+    <div class="card">
+        <div class="card-title">Multi-Timeframe Alignment</div>
+        <div class="tf-panel" id="tf-panel">
+            <div class="tf-cell"><div class="tf-label">15m</div><div class="tf-bias bias-mixed" id="tf-15m">--</div></div>
+            <div class="tf-cell"><div class="tf-label">4h</div><div class="tf-bias bias-mixed" id="tf-4h">--</div></div>
+            <div class="tf-cell"><div class="tf-label">1d</div><div class="tf-bias bias-mixed" id="tf-1d">--</div></div>
+        </div>
+        <div id="tf-indicators" style="margin-top: 12px;"></div>
+    </div>
+
+    <!-- Pending Signals -->
+    <div class="card">
+        <div class="card-title">Pending Signals</div>
+        <div id="signals-container">
+            <div style="color: var(--text-secondary); font-size: 13px;">No pending signals</div>
+        </div>
+    </div>
+</div>
+
+<!-- Open Positions Table -->
+<div class="section">
+    <div class="section-title">Open Positions</div>
+    <div class="card" style="padding: 0; overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Direction</th>
+                    <th>Entry</th>
+                    <th>Current</th>
+                    <th>Quantity</th>
+                    <th>PnL</th>
+                    <th>R-Mult</th>
+                    <th>Stop</th>
+                    <th>TP1/2/3</th>
+                    <th>Trailing</th>
+                    <th>Age</th>
+                    <th>Lev</th>
+                </tr>
+            </thead>
+            <tbody id="positions-table">
+                <tr><td colspan="12" style="text-align: center; color: var(--text-secondary);">No open positions</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Recent Trades Table -->
+<div class="section">
+    <div class="section-title">Recent Trades</div>
+    <div class="card" style="padding: 0; overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Direction</th>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th>PnL</th>
+                    <th>R-Mult</th>
+                    <th>Duration</th>
+                    <th>Exit Reason</th>
+                    <th>Scale-Ins</th>
+                </tr>
+            </thead>
+            <tbody id="trades-table">
+                <tr><td colspan="9" style="text-align: center; color: var(--text-secondary);">No trades yet</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Strategy Metrics & Paper Criteria -->
+<div class="grid grid-2 section">
+    <!-- ADX-Stratified Performance -->
+    <div class="card">
+        <div class="card-title">ADX-Stratified Performance</div>
+        <table>
+            <thead><tr><th>ADX Range</th><th>Trades</th><th>Win Rate</th><th>Avg PnL</th></tr></thead>
+            <tbody id="adx-perf-table">
+                <tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">Insufficient data</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Paper Trading Criteria -->
+    <div class="card">
+        <div class="card-title">Paper Trading Go-Live Criteria</div>
+        <div id="criteria-container">
+            <div style="color: var(--text-secondary); font-size: 13px;">Loading...</div>
+        </div>
+    </div>
+</div>
+
+<!-- Risk State -->
+<div class="section">
+    <div class="section-title">Risk & Filter State</div>
+    <div class="grid grid-3">
+        <div class="card">
+            <div class="card-title">Consecutive Losses</div>
+            <div class="card-value" id="consec-losses">0</div>
+        </div>
+        <div class="card">
+            <div class="card-title">Kelly %</div>
+            <div class="card-value" id="kelly-pct">--</div>
+        </div>
+        <div class="card">
+            <div class="card-title">DD Recovery</div>
+            <div class="card-value" id="dd-recovery">--</div>
+        </div>
+    </div>
+</div>
+
+<script>
+const API_BASE = '';
+let ws = null;
+
+// Initial data load
+async function loadData() {
+    try {
+        const [positions, trades, metrics, signals, stratMetrics, riskState, criteria] = await Promise.all([
+            fetch(`${API_BASE}/api/positions`).then(r => r.json()),
+            fetch(`${API_BASE}/api/trades?limit=20`).then(r => r.json()),
+            fetch(`${API_BASE}/api/metrics`).then(r => r.json()),
+            fetch(`${API_BASE}/api/signals`).then(r => r.json()),
+            fetch(`${API_BASE}/api/strat-metrics`).then(r => r.json()),
+            fetch(`${API_BASE}/api/risk-state`).then(r => r.json()),
+            fetch(`${API_BASE}/api/paper-criteria`).then(r => r.json()),
+        ]);
+
+        updateMetrics(metrics);
+        updatePositions(positions);
+        updateTrades(trades);
+        updateSignals(signals);
+        updateStratMetrics(stratMetrics);
+        updateRiskState(riskState);
+        updateCriteria(criteria);
+    } catch (e) {
+        console.error('Data load error:', e);
+    }
+}
+
+function updateMetrics(m) {
+    if (!m) return;
+    setVal('total-pnl', `$${(m.total_pnl || 0).toFixed(2)}`, m.total_pnl);
+    setVal('win-rate', `${(m.win_rate || 0).toFixed(1)}%`);
+    setVal('max-dd', `${(m.max_drawdown_pct || 0).toFixed(1)}%`);
+    setVal('profit-factor', (m.profit_factor || 0).toFixed(2));
+    setVal('sharpe', (m.sharpe_ratio || 0).toFixed(2));
+    setVal('total-trades', m.total_trades || 0);
+}
+
+function updatePositions(positions) {
+    const el = document.getElementById('positions-table');
+    document.getElementById('open-positions').textContent = positions.length;
+    if (!positions.length) {
+        el.innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--text-secondary)">No open positions</td></tr>';
+        return;
+    }
+    el.innerHTML = positions.map(p => `
+        <tr>
+            <td><strong>${p.symbol}</strong></td>
+            <td class="${p.direction === 'LONG' ? 'long' : 'short'}">${p.direction}</td>
+            <td>${p.avg_entry_price.toFixed(4)}</td>
+            <td>${(p.last_price || 0).toFixed(4)}</td>
+            <td>${p.remaining_quantity.toFixed(6)}</td>
+            <td class="${p.unrealized_pnl >= 0 ? 'long' : 'short'}">${p.unrealized_pnl.toFixed(4)}</td>
+            <td>${p.r_multiple.toFixed(2)}R</td>
+            <td>${p.hard_stop_price.toFixed(4)}</td>
+            <td>${p.tp1_filled?'Y':'N'}/${p.tp2_filled?'Y':'N'}/${p.tp3_filled?'Y':'N'}</td>
+            <td>${p.trailing_active ? p.trailing_stop.toFixed(4) : '--'}</td>
+            <td>${p.entry_age_hours.toFixed(1)}h</td>
+            <td>${p.leverage}x</td>
+        </tr>
+    `).join('');
+}
+
+function updateTrades(trades) {
+    const el = document.getElementById('trades-table');
+    if (!trades.length) {
+        el.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-secondary)">No trades yet</td></tr>';
+        return;
+    }
+    el.innerHTML = trades.slice(-20).reverse().map(t => `
+        <tr>
+            <td><strong>${t.symbol}</strong></td>
+            <td class="${t.direction === 'LONG' ? 'long' : 'short'}">${t.direction}</td>
+            <td>${(t.avg_entry_price || t.entry_price).toFixed(4)}</td>
+            <td>${(t.exit_price || 0).toFixed(4)}</td>
+            <td class="${(t.realized_pnl||0) >= 0 ? 'long' : 'short'}">${(t.realized_pnl||0).toFixed(4)}</td>
+            <td>${(t.r_multiple||0).toFixed(2)}R</td>
+            <td>${formatDuration(t.duration_ms)}</td>
+            <td>${t.exit_reason}</td>
+            <td>${t.scale_in_count || 0}</td>
+        </tr>
+    `).join('');
+}
+
+function updateSignals(signals) {
+    const el = document.getElementById('signals-container');
+    if (!signals.length) {
+        el.innerHTML = '<div style="color:var(--text-secondary);font-size:13px">No pending signals</div>';
+        return;
+    }
+    el.innerHTML = signals.map(s => `
+        <div class="signal-card signal-${s.direction.toLowerCase()}">
+            <div style="display:flex;justify-content:space-between">
+                <strong>${s.symbol}</strong>
+                <span class="${s.direction === 'LONG' ? 'long' : 'short'}">${s.direction}</span>
+            </div>
+            <div class="ind-row">
+                <div class="ind-item"><span class="ind-label">ADX:</span><span class="ind-val">${s.adx_value.toFixed(1)}</span></div>
+                <div class="ind-item"><span class="ind-label">RSI:</span><span class="ind-val">${s.rsi_value.toFixed(1)}</span></div>
+                <div class="ind-item"><span class="ind-label">Status:</span><span class="ind-val">${s.status}</span></div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function updateStratMetrics(sm) {
+    if (!sm) return;
+    setVal('avg-r', `${(sm.avg_r_multiple || 0).toFixed(2)}R`);
+
+    // ADX stratified table
+    const adxEl = document.getElementById('adx-perf-table');
+    const adx = sm.adx_stratified || {};
+    if (Object.keys(adx).length) {
+        adxEl.innerHTML = Object.entries(adx).map(([range, data]) => `
+            <tr>
+                <td>${range}</td>
+                <td>${data.count}</td>
+                <td>${data.win_rate.toFixed(1)}%</td>
+                <td class="${data.avg_pnl >= 0 ? 'long' : 'short'}">${data.avg_pnl.toFixed(4)}</td>
+            </tr>
+        `).join('');
+    }
+}
+
+function updateRiskState(rs) {
+    if (!rs) return;
+    setVal('consec-losses', rs.consecutive_losses || 0);
+    setVal('kelly-pct', rs.kelly_pct !== null ? `${rs.kelly_pct.toFixed(2)}%` : '--');
+    setVal('dd-recovery', rs.in_dd_recovery ? `${rs.dd_recovery_trades_remaining} trades` : 'Normal');
+}
+
+function updateCriteria(data) {
+    const el = document.getElementById('criteria-container');
+    if (!data || !data.criteria) return;
+    const c = data.criteria;
+    el.innerHTML = Object.entries(c).map(([key, val]) => `
+        <div class="criteria-item">
+            <div class="criteria-check ${val.met ? 'criteria-pass' : 'criteria-fail'}">${val.met ? '&#10003;' : '&#10007;'}</div>
+            <span>${key.replace(/_/g, ' ')}: ${typeof val.current === 'number' ? val.current.toFixed(2) : val.current} (need: ${val.required})</span>
+        </div>
+    `).join('');
+    if (data.ready_for_live) {
+        el.innerHTML += '<div style="margin-top:12px;color:var(--green);font-weight:600">Ready for live trading</div>';
+    }
+}
+
+// Multi-TF panel update
+async function updateMultiTF(symbol) {
+    try {
+        const data = await fetch(`${API_BASE}/api/multi-tf/${symbol}`).then(r => r.json());
+        const tfs = data.timeframes || {};
+        for (const [tf, info] of Object.entries(tfs)) {
+            const el = document.getElementById(`tf-${tf}`);
+            if (el) {
+                el.textContent = info.bias || '--';
+                el.className = `tf-bias bias-${(info.bias || 'mixed').toLowerCase()}`;
+            }
+        }
+    } catch (e) { console.error('Multi-TF error:', e); }
+}
+
+// ADX gauge update
+async function updateADXGauge(symbol) {
+    try {
+        const data = await fetch(`${API_BASE}/api/adx-gauge/${symbol}`).then(r => r.json());
+        const val = data.adx || 0;
+        const el = document.getElementById('adx-value');
+        const label = document.getElementById('adx-label');
+        el.textContent = val.toFixed(1);
+        document.getElementById('plus-di').textContent = (data.plus_di || 0).toFixed(1);
+        document.getElementById('minus-di').textContent = (data.minus_di || 0).toFixed(1);
+
+        el.className = 'gauge-value ';
+        if (val >= 40) { el.className += 'gauge-very-strong'; label.textContent = 'Very Strong Trend'; }
+        else if (val >= 25) { el.className += 'gauge-strong'; label.textContent = 'Strong Trend'; }
+        else if (val >= 20) { el.className += 'gauge-weak'; label.textContent = 'Weak Trend'; }
+        else { el.className += 'gauge-ranging'; label.textContent = 'Ranging Market'; }
+    } catch (e) { console.error('ADX gauge error:', e); }
+}
+
+// Chart
+async function loadChart() {
+    const symbol = document.getElementById('chart-symbol').value;
+    if (!symbol) return;
+    try {
+        const data = await fetch(`${API_BASE}/api/ema-chart/${symbol}`).then(r => r.json());
+        drawEMAChart(data);
+        updateMultiTF(symbol);
+        updateADXGauge(symbol);
+    } catch (e) { console.error('Chart error:', e); }
+}
+
+function drawEMAChart(data) {
+    const canvas = document.getElementById('ema-chart');
+    const ctx = canvas.getContext('2d');
+    canvas.width = canvas.parentElement.clientWidth - 32;
+    canvas.height = 300;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const closes = data.closes || [];
+    if (!closes.length) return;
+
+    const all = [...closes, ...(data.ema20||[]).filter(v=>v!==null), ...(data.ema50||[]).filter(v=>v!==null), ...(data.ema200||[]).filter(v=>v!==null)].filter(v=>isFinite(v));
+    const minY = Math.min(...all);
+    const maxY = Math.max(...all);
+    const yRange = maxY - minY || 1;
+    const pad = 40;
+    const w = canvas.width - pad * 2;
+    const h = canvas.height - pad * 2;
+
+    function x(i) { return pad + (i / (closes.length - 1)) * w; }
+    function y(v) { return pad + h - ((v - minY) / yRange) * h; }
+
+    // Draw grid
+    ctx.strokeStyle = '#1c2333';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i < 5; i++) {
+        const gy = pad + (i / 4) * h;
+        ctx.beginPath(); ctx.moveTo(pad, gy); ctx.lineTo(pad + w, gy); ctx.stroke();
+        const val = maxY - (i / 4) * yRange;
+        ctx.fillStyle = '#8b949e';
+        ctx.font = '10px Inter';
+        ctx.fillText(val.toFixed(2), 2, gy + 3);
+    }
+
+    // Draw price line
+    ctx.strokeStyle = '#c9d1d9';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    closes.forEach((v, i) => { if (i === 0) ctx.moveTo(x(i), y(v)); else ctx.lineTo(x(i), y(v)); });
+    ctx.stroke();
+
+    // Draw EMAs
+    function drawLine(arr, color) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        let started = false;
+        arr.forEach((v, i) => {
+            if (v === null || !isFinite(v)) return;
+            if (!started) { ctx.moveTo(x(i), y(v)); started = true; }
+            else ctx.lineTo(x(i), y(v));
+        });
+        ctx.stroke();
+    }
+
+    drawLine(data.ema20 || [], '#f0b90b');
+    drawLine(data.ema50 || [], '#58a6ff');
+    drawLine(data.ema200 || [], '#bc8cff');
+}
+
+// Helpers
+function setVal(id, text, pnlVal) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.textContent = text;
+        if (pnlVal !== undefined) {
+            el.className = 'card-value ' + (pnlVal >= 0 ? 'positive' : 'negative');
+        }
+    }
+}
+
+function formatDuration(ms) {
+    if (!ms) return '--';
+    const hours = ms / (3600 * 1000);
+    if (hours < 24) return `${hours.toFixed(1)}h`;
+    return `${(hours / 24).toFixed(1)}d`;
+}
+
+async function killSwitch() {
+    if (!confirm('EMERGENCY: Cancel all orders and close all positions?')) return;
+    try {
+        const resp = await fetch(`${API_BASE}/api/kill`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({reason: 'Manual kill switch'}) });
+        const data = await resp.json();
+        alert(`Kill switch executed: ${data.status}`);
+        loadData();
+    } catch (e) { alert('Kill switch error: ' + e); }
+}
+
+// Init
+function initSymbolSelector() {
+    const sel = document.getElementById('chart-symbol');
+    const instruments = {{ instruments | tojson }};
+    instruments.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s;
+        opt.textContent = s;
+        sel.appendChild(opt);
+    });
+}
+
+// WebSocket for real-time updates
+function connectWS() {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${protocol}//${location.host}/ws`);
+    ws.onmessage = function(evt) {
+        try {
+            const data = JSON.parse(evt.data);
+            if (data.positions) updatePositions(data.positions);
+            if (data.metrics) updateMetrics(data.metrics);
+        } catch (e) {}
+    };
+    ws.onclose = function() { setTimeout(connectWS, 3000); };
+}
+
+// Start
+document.addEventListener('DOMContentLoaded', () => {
+    initSymbolSelector();
+    loadData();
+    loadChart();
+    connectWS();
+    setInterval(loadData, 10000);
+});
+</script>
+{% endblock %}

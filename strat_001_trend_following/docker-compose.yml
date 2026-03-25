@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  strat-001-trend:
+    build:
+      context: ..
+      dockerfile: strat_001_trend_following/Dockerfile
+    container_name: strat-001-trend-following
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./data:/app/strat_001/data
+      - ./config.yaml:/app/strat_001/config.yaml:ro
+    env_file:
+      - .env
+    environment:
+      - BOT_MODE=${BOT_MODE:-paper}
+      - TZ=UTC
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+        reservations:
+          memory: 256M
+          cpus: "0.5"
+    networks:
+      - trading-net
+
+networks:
+  trading-net:
+    external: true
+    name: trading-net

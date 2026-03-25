@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ strategy_name }} Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0d1117; color: #c9d1d9; }
+        .header { background: #161b22; padding: 16px 24px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 18px; color: #58a6ff; }
+        .header .meta { display: flex; gap: 20px; font-size: 13px; color: #8b949e; }
+        .mode-badge { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+        .mode-paper { background: #1f6feb33; color: #58a6ff; }
+        .mode-live { background: #23863633; color: #3fb950; }
+        .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; padding: 16px 24px; }
+        .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+        .card h3 { font-size: 12px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+        .card .value { font-size: 28px; font-weight: 700; }
+        .card .sub { font-size: 12px; color: #8b949e; margin-top: 4px; }
+        .positive { color: #3fb950; }
+        .negative { color: #f85149; }
+        .neutral { color: #58a6ff; }
+        .section { padding: 0 24px 16px; }
+        .section h2 { font-size: 14px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; padding-top: 16px; border-top: 1px solid #30363d; }
+        .wide { grid-column: span 2; }
+        .full { grid-column: span 4; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th { text-align: left; padding: 8px 12px; color: #8b949e; border-bottom: 1px solid #30363d; font-weight: 500; }
+        td { padding: 6px 12px; border-bottom: 1px solid #21262d; }
+        tr:hover { background: #1c2128; }
+        .status-ok { color: #3fb950; }
+        .status-warn { color: #d29922; }
+        .status-error { color: #f85149; }
+        .latency-bar { display: inline-block; height: 8px; border-radius: 4px; background: #238636; min-width: 4px; }
+        .latency-bar.slow { background: #d29922; }
+        .latency-bar.critical { background: #f85149; }
+        .kill-btn { background: #da3633; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 12px; }
+        .kill-btn:hover { background: #f85149; }
+        .opp-stream { max-height: 300px; overflow-y: auto; }
+        .exec-log { max-height: 400px; overflow-y: auto; }
+        .wallet-bar { display: flex; height: 24px; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+        .wallet-bar .spot { background: #238636; }
+        .wallet-bar .futures { background: #1f6feb; }
+        .cb-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+        .cb-active { background: #3fb950; }
+        .cb-halted { background: #f85149; }
+        .cb-warning { background: #d29922; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>{{ strategy_name }}</h1>
+        </div>
+        <div class="meta">
+            <span class="mode-badge mode-{{ mode }}">{{ mode }}</span>
+            <span>Uptime: <span id="uptime">{{ uptime }}</span></span>
+            <span>Memory: <span id="memory">{{ memory_mb }}</span> MB</span>
+            <button class="kill-btn" onclick="killSwitch()">KILL SWITCH</button>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <h3>Net Profit</h3>
+            <div class="value" id="total-pnl">$0.00</div>
+            <div class="sub">Daily: <span id="daily-pnl">$0.00</span></div>
+        </div>
+        <div class="card">
+            <h3>Win Rate</h3>
+            <div class="value neutral" id="win-rate">0.0%</div>
+            <div class="sub">Total trades: <span id="total-trades">0</span></div>
+        </div>
+        <div class="card">
+            <h3>Opps / Hour</h3>
+            <div class="value neutral" id="opps-per-hour">0</div>
+            <div class="sub">Mode A: <span id="mode-a-count">0</span> | Mode B: <span id="mode-b-count">0</span></div>
+        </div>
+        <div class="card">
+            <h3>Avg Latency</h3>
+            <div class="value" id="avg-latency">0ms</div>
+            <div class="sub">P95: <span id="p95-latency">0ms</span></div>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card wide">
+            <h3>Wallet Balance</h3>
+            <div class="value neutral" id="total-equity">$0.00</div>
+            <div class="wallet-bar">
+                <div class="spot" id="spot-bar" style="width:50%"></div>
+                <div class="futures" id="futures-bar" style="width:50%"></div>
+            </div>
+            <div class="sub" style="margin-top:8px">
+                Spot: <span id="spot-pct">50.0%</span> ($<span id="spot-bal">0</span>) |
+                Futures: <span id="futures-pct">50.0%</span> ($<span id="futures-bal">0</span>)
+            </div>
+        </div>
+        <div class="card wide">
+            <h3>Risk Status</h3>
+            <div id="risk-status">
+                <div style="margin-bottom:8px">
+                    <span class="cb-indicator cb-active" id="trade-indicator"></span>
+                    <span id="trade-status">Ready</span>
+                </div>
+                <div class="sub">
+                    Active arbs: <span id="active-arbs">0</span> |
+                    Unhedged: <span id="unhedged-count">0</span> |
+                    BTC 15m: <span id="btc-vol">0.0%</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Recent Opportunities</h2>
+        <div class="card full opp-stream">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Mode</th>
+                        <th>Symbol</th>
+                        <th>Gross %</th>
+                        <th>Net %</th>
+                        <th>Size</th>
+                        <th>Status</th>
+                        <th>Reason</th>
+                    </tr>
+                </thead>
+                <tbody id="opp-table"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Execution Log</h2>
+        <div class="card full exec-log">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Mode</th>
+                        <th>Symbol</th>
+                        <th>Status</th>
+                        <th>Profit</th>
+                        <th>Fees</th>
+                        <th>Latency</th>
+                        <th>Legs</th>
+                        <th>Slippage</th>
+                    </tr>
+                </thead>
+                <tbody id="exec-table"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const wsUrl = "{{ ws_url }}";
+        let ws;
+
+        function connectWS() {
+            ws = new WebSocket(wsUrl);
+            ws.onmessage = (e) => {
+                const data = JSON.parse(e.data);
+                if (data.type === 'update') updateDashboard(data);
+            };
+            ws.onclose = () => setTimeout(connectWS, 3000);
+            ws.onerror = () => ws.close();
+        }
+
+        function updateDashboard(data) {
+            document.getElementById('uptime').textContent = data.uptime || '';
+            document.getElementById('memory').textContent = data.memory_mb || 0;
+
+            const m = data.metrics || {};
+            const arb = data.arb || {};
+            const exec = arb.execution || {};
+            const scanner = arb.scanner || {};
+            const risk = arb.risk || {};
+            const wallet = arb.wallet || {};
+
+            // Top cards
+            const pnl = m.total_pnl || 0;
+            const pnlEl = document.getElementById('total-pnl');
+            pnlEl.textContent = '$' + pnl.toFixed(4);
+            pnlEl.className = 'value ' + (pnl >= 0 ? 'positive' : 'negative');
+
+            document.getElementById('daily-pnl').textContent = '$' + (m.daily_pnl || 0).toFixed(4);
+            document.getElementById('win-rate').textContent = (m.win_rate || 0).toFixed(1) + '%';
+            document.getElementById('total-trades').textContent = m.total_trades || 0;
+            document.getElementById('opps-per-hour').textContent = m.opportunities_per_hour || 0;
+            document.getElementById('mode-a-count').textContent = m.mode_a_detected || 0;
+            document.getElementById('mode-b-count').textContent = m.mode_b_detected || 0;
+            document.getElementById('avg-latency').textContent = (m.avg_latency_ms || 0).toFixed(0) + 'ms';
+            document.getElementById('p95-latency').textContent = (m.latency_p95_ms || 0).toFixed(0) + 'ms';
+
+            // Wallet
+            document.getElementById('total-equity').textContent = '$' + (wallet.total_usdt || 0).toFixed(2);
+            document.getElementById('spot-pct').textContent = (wallet.spot_pct || 50).toFixed(1) + '%';
+            document.getElementById('futures-pct').textContent = (wallet.futures_pct || 50).toFixed(1) + '%';
+            document.getElementById('spot-bal').textContent = (wallet.spot_usdt || 0).toFixed(2);
+            document.getElementById('futures-bal').textContent = (wallet.futures_usdt || 0).toFixed(2);
+            document.getElementById('spot-bar').style.width = (wallet.spot_pct || 50) + '%';
+            document.getElementById('futures-bar').style.width = (wallet.futures_pct || 50) + '%';
+
+            // Risk
+            const cb = (risk.circuit_breakers || {});
+            const canTrade = risk.can_trade;
+            const indicator = document.getElementById('trade-indicator');
+            const statusEl = document.getElementById('trade-status');
+            indicator.className = 'cb-indicator ' + (canTrade ? 'cb-active' : 'cb-halted');
+            statusEl.textContent = canTrade ? 'Trading Active' : (risk.can_trade_reason || 'Halted');
+            document.getElementById('active-arbs').textContent = exec.active_executions || 0;
+            document.getElementById('unhedged-count').textContent = exec.unhedged_count || 0;
+            document.getElementById('btc-vol').textContent = (cb.btc_15m_change_pct || 0).toFixed(2) + '%';
+
+            // Opportunities table
+            const opps = arb.recent_opportunities || [];
+            const oppBody = document.getElementById('opp-table');
+            oppBody.innerHTML = opps.slice(0, 20).map(o => `
+                <tr>
+                    <td>${new Date(o.detected_at * 1000).toLocaleTimeString()}</td>
+                    <td>${o.mode}</td>
+                    <td>${o.symbol}</td>
+                    <td>${(o.gross_profit_pct || 0).toFixed(4)}%</td>
+                    <td class="${o.net_profit_pct >= 0 ? 'positive' : 'negative'}">${(o.net_profit_pct || 0).toFixed(4)}%</td>
+                    <td>$${(o.trade_size_usdt || 0).toFixed(0)}</td>
+                    <td class="${o.taken ? 'status-ok' : 'status-warn'}">${o.taken ? 'TAKEN' : 'SKIP'}</td>
+                    <td>${o.skip_reason || ''}</td>
+                </tr>
+            `).join('');
+
+            // Execution table
+            const execs = arb.recent_executions || [];
+            const execBody = document.getElementById('exec-table');
+            execBody.innerHTML = execs.slice(0, 20).map(e => `
+                <tr>
+                    <td>${e.mode}</td>
+                    <td>${e.symbol}</td>
+                    <td class="${e.success ? 'status-ok' : 'status-error'}">${e.success ? 'OK' : 'FAIL'}</td>
+                    <td class="${e.actual_profit_usdt >= 0 ? 'positive' : 'negative'}">$${(e.actual_profit_usdt || 0).toFixed(4)}</td>
+                    <td>$${(e.total_fees_usdt || 0).toFixed(4)}</td>
+                    <td>${(e.execution_time_ms || 0).toFixed(0)}ms</td>
+                    <td>${e.legs_filled}/${e.legs_total}</td>
+                    <td>$${(e.slippage_usdt || 0).toFixed(4)}</td>
+                </tr>
+            `).join('');
+        }
+
+        function killSwitch() {
+            if (confirm('EMERGENCY: Activate kill switch? This will cancel all orders and close all positions.')) {
+                fetch('/kill', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({reason: 'Dashboard kill switch'})
+                }).then(r => r.json()).then(d => alert(JSON.stringify(d, null, 2)));
+            }
+        }
+
+        connectWS();
+    </script>
+</body>
+</html>

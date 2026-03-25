@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ strategy_name }} Dashboard</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-card: #1c2333;
+            --border: #30363d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --green: #3fb950;
+            --red: #f85149;
+            --yellow: #d29922;
+            --blue: #58a6ff;
+            --purple: #bc8cff;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+               background: var(--bg-primary); color: var(--text-primary); }
+        .header { background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+                   padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 18px; font-weight: 600; }
+        .header .mode { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+        .mode-paper { background: var(--yellow); color: #000; }
+        .mode-live { background: var(--green); color: #000; }
+        .header .info { color: var(--text-secondary); font-size: 13px; }
+        .container { padding: 16px 24px; max-width: 1800px; margin: 0 auto; }
+        .grid { display: grid; gap: 16px; margin-bottom: 16px; }
+        .grid-4 { grid-template-columns: repeat(4, 1fr); }
+        .grid-3 { grid-template-columns: repeat(3, 1fr); }
+        .grid-2 { grid-template-columns: repeat(2, 1fr); }
+        .card { background: var(--bg-card); border: 1px solid var(--border);
+                border-radius: 8px; padding: 16px; }
+        .card h3 { font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;
+                    text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-value { font-size: 28px; font-weight: 700; }
+        .stat-sub { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+        .positive { color: var(--green); }
+        .negative { color: var(--red); }
+        .warning { color: var(--yellow); }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 8px 12px; color: var(--text-secondary);
+             border-bottom: 1px solid var(--border); font-weight: 500; }
+        td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+        .gauge { width: 100%; height: 12px; background: var(--bg-primary);
+                 border-radius: 6px; overflow: hidden; margin-top: 8px; }
+        .gauge-fill { height: 100%; border-radius: 6px; transition: width 0.5s; }
+        .gauge-safe { background: var(--green); }
+        .gauge-warning { background: var(--yellow); }
+        .gauge-critical { background: var(--red); }
+        .basis-chart { height: 120px; position: relative; overflow: hidden; }
+        .basis-bar { position: absolute; bottom: 0; width: 2px; background: var(--blue); }
+        .controls { display: flex; gap: 8px; margin-top: 12px; }
+        .btn { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border);
+               background: var(--bg-secondary); color: var(--text-primary);
+               cursor: pointer; font-size: 13px; transition: all 0.2s; }
+        .btn:hover { background: var(--border); }
+        .btn-danger { background: #b62324; border-color: #da3633; }
+        .btn-danger:hover { background: #da3633; }
+        .btn-active { background: var(--blue); color: #000; border-color: var(--blue); }
+        .instrument-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+        .inst-card { background: var(--bg-secondary); border: 1px solid var(--border);
+                     border-radius: 6px; padding: 12px; }
+        .inst-header { display: flex; justify-content: space-between; align-items: center;
+                       margin-bottom: 8px; }
+        .inst-symbol { font-size: 15px; font-weight: 600; }
+        .inst-yield { font-size: 14px; font-weight: 600; }
+        .inst-row { display: flex; justify-content: space-between; font-size: 12px;
+                    padding: 3px 0; color: var(--text-secondary); }
+        .inst-row span:last-child { color: var(--text-primary); }
+        .delta-indicator { display: inline-block; width: 8px; height: 8px;
+                           border-radius: 50%; margin-right: 4px; }
+        .delta-ok { background: var(--green); }
+        .delta-warn { background: var(--yellow); }
+        .delta-bad { background: var(--red); }
+        @media (max-width: 1200px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 768px) { .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>{{ strategy_name }}</h1>
+            <span class="info">{{ strategy_id }} | Uptime: <span id="uptime">{{ uptime }}</span> | Memory: <span id="memory">{{ memory_mb }}</span> MB</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <span class="mode {% if mode == 'paper' %}mode-paper{% else %}mode-live{% endif %}">
+                {{ mode | upper }}
+            </span>
+            <div class="controls">
+                <button class="btn" id="btn-aggressive" onclick="setMode('aggressive')">Aggressive</button>
+                <button class="btn btn-active" id="btn-standard" onclick="setMode('standard')">Standard</button>
+                <button class="btn" id="btn-conservative" onclick="setMode('conservative')">Conservative</button>
+                <button class="btn btn-danger" onclick="killSwitch()">KILL SWITCH</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Top Stats -->
+        <div class="grid grid-4">
+            <div class="card">
+                <h3>Total Funding Income</h3>
+                <div class="stat-value" id="total-funding">$0.00</div>
+                <div class="stat-sub">Cumulative all instruments</div>
+            </div>
+            <div class="card">
+                <h3>Annualized Yield</h3>
+                <div class="stat-value" id="annualized-yield">0.00%</div>
+                <div class="stat-sub">Weighted by notional</div>
+            </div>
+            <div class="card">
+                <h3>Delta Neutrality Score</h3>
+                <div class="stat-value" id="delta-score">100.0%</div>
+                <div class="stat-sub">% time within +/-0.5%</div>
+            </div>
+            <div class="card">
+                <h3>Total Equity</h3>
+                <div class="stat-value" id="total-equity">$0.00</div>
+                <div class="stat-sub">Spot + Futures wallets</div>
+            </div>
+        </div>
+
+        <!-- Positions Table -->
+        <div class="card" style="margin-bottom: 16px;">
+            <h3>Active Positions</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Spot Qty</th>
+                        <th>Spot Price</th>
+                        <th>Futures Price</th>
+                        <th>Basis</th>
+                        <th>Funding Income</th>
+                        <th>Ann. Yield</th>
+                        <th>Delta</th>
+                        <th>Holding</th>
+                        <th>Pred. Rate</th>
+                    </tr>
+                </thead>
+                <tbody id="positions-table">
+                    <tr><td colspan="10" style="text-align:center; color: var(--text-secondary);">No active positions</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="grid grid-2">
+            <!-- Wallet Balances -->
+            <div class="card">
+                <h3>Wallet Balances</h3>
+                <div style="display: flex; gap: 24px; margin-bottom: 12px;">
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-secondary);">Spot Wallet</div>
+                        <div style="font-size: 20px; font-weight: 600;" id="spot-balance">$0.00</div>
+                        <div class="stat-sub" id="spot-pct">55%</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-secondary);">Futures Wallet</div>
+                        <div style="font-size: 20px; font-weight: 600;" id="futures-balance">$0.00</div>
+                        <div class="stat-sub" id="futures-pct">45%</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 12px; color: var(--text-secondary);">Margin Used</div>
+                        <div style="font-size: 20px; font-weight: 600;" id="margin-used">$0.00</div>
+                    </div>
+                </div>
+                <h3>Liquidation Distance</h3>
+                <div id="liq-gauges"></div>
+            </div>
+
+            <!-- Risk Status -->
+            <div class="card">
+                <h3>Risk Status</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px;">
+                    <div class="inst-row"><span>Daily Drawdown</span><span id="dd-daily">0.00%</span></div>
+                    <div class="inst-row"><span>Daily Limit</span><span>1.50%</span></div>
+                    <div class="inst-row"><span>Weekly Drawdown</span><span id="dd-weekly">0.00%</span></div>
+                    <div class="inst-row"><span>Weekly Limit</span><span>3.00%</span></div>
+                    <div class="inst-row"><span>Monthly Drawdown</span><span id="dd-monthly">0.00%</span></div>
+                    <div class="inst-row"><span>Monthly Limit</span><span>5.00%</span></div>
+                    <div class="inst-row"><span>Consecutive Losses</span><span id="consec-losses">0</span></div>
+                    <div class="inst-row"><span>Size Multiplier</span><span id="size-mult">1.0x</span></div>
+                    <div class="inst-row"><span>Kill Switch</span><span id="kill-status" class="positive">Inactive</span></div>
+                    <div class="inst-row"><span>Circuit Breaker</span><span id="cb-status" class="positive">Inactive</span></div>
+                    <div class="inst-row"><span>Cost/Income Ratio</span><span id="cost-income">0.0%</span></div>
+                    <div class="inst-row"><span>Min Liq Distance</span><span id="min-liq">100.0%</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Instruments -->
+        <div class="card" style="margin-top: 16px;">
+            <h3>Instrument Monitor</h3>
+            <div class="instrument-grid" id="instruments-grid"></div>
+        </div>
+
+        <!-- Funding Settlement History -->
+        <div class="card" style="margin-top: 16px;">
+            <h3>Funding Metrics</h3>
+            <div style="display: flex; gap: 24px; margin-bottom: 12px;">
+                <div>
+                    <div style="font-size: 12px; color: var(--text-secondary);">Settlements Tracked</div>
+                    <div style="font-size: 18px; font-weight: 600;" id="settlements-count">0</div>
+                </div>
+                <div>
+                    <div style="font-size: 12px; color: var(--text-secondary);">Avg Rate Captured</div>
+                    <div style="font-size: 18px; font-weight: 600;" id="avg-rate">0.0000%</div>
+                </div>
+                <div>
+                    <div style="font-size: 12px; color: var(--text-secondary);">Win/Loss Rate</div>
+                    <div style="font-size: 18px; font-weight: 600;" id="funding-winrate">0.0%</div>
+                </div>
+                <div>
+                    <div style="font-size: 12px; color: var(--text-secondary);">Next Funding</div>
+                    <div style="font-size: 18px; font-weight: 600;" id="next-funding">--:--</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const wsUrl = "{{ ws_url }}";
+        let ws;
+
+        function connectWS() {
+            ws = new WebSocket(wsUrl);
+            ws.onopen = () => console.log("WS connected");
+            ws.onclose = () => { console.log("WS disconnected"); setTimeout(connectWS, 3000); };
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === "update") updateDashboard(data);
+            };
+        }
+
+        function updateDashboard(data) {
+            document.getElementById("uptime").textContent = data.uptime || "";
+            document.getElementById("memory").textContent = data.memory_mb || "";
+
+            const m = data.metrics || {};
+            const s = m.strategy || {};
+            const r = m.risk || {};
+            const w = m.wallet || {};
+            const f = m.funding || {};
+
+            // Top stats
+            setText("total-funding", "$" + (f.total_funding_income || 0).toFixed(4));
+            setText("delta-score", (r.delta_neutrality_score || 100).toFixed(1) + "%");
+
+            // Wallet
+            setText("spot-balance", "$" + (w.spot_usdt || 0).toFixed(2));
+            setText("futures-balance", "$" + (w.futures_balance || 0).toFixed(2));
+            setText("spot-pct", (w.spot_pct || 0).toFixed(1) + "% (target: 55%)");
+            setText("futures-pct", (w.futures_pct || 0).toFixed(1) + "% (target: 45%)");
+            setText("total-equity", "$" + (w.total_equity || 0).toFixed(2));
+            setText("margin-used", "$" + (w.futures_margin_used || 0).toFixed(2));
+
+            // Risk
+            const dd = r.drawdown || {};
+            setText("dd-daily", (dd.daily_pct || 0).toFixed(2) + "%");
+            setText("dd-weekly", (dd.weekly_pct || 0).toFixed(2) + "%");
+            setText("dd-monthly", (dd.monthly_pct || 0).toFixed(2) + "%");
+            setText("consec-losses", r.consecutive_losses || 0);
+            setText("size-mult", (r.size_multiplier || 1) + "x");
+            setText("cost-income", (m.cost_to_income_ratio || 0).toFixed(1) + "%");
+            setText("min-liq", (r.min_liquidation_distance_pct || 100).toFixed(1) + "%");
+
+            const killEl = document.getElementById("kill-status");
+            if (r.kill_switch_active) {
+                killEl.textContent = "ACTIVE"; killEl.className = "negative";
+            } else {
+                killEl.textContent = "Inactive"; killEl.className = "positive";
+            }
+
+            const cbEl = document.getElementById("cb-status");
+            if (s.circuit_breaker_active) {
+                cbEl.textContent = s.circuit_breaker_reason || "Active"; cbEl.className = "warning";
+            } else {
+                cbEl.textContent = "Inactive"; cbEl.className = "positive";
+            }
+
+            // Funding metrics
+            setText("settlements-count", f.total_settlements_tracked || 0);
+            setText("avg-rate", ((f.average_funding_rate_captured || 0) * 100).toFixed(4) + "%");
+            setText("funding-winrate", (f.funding_win_loss_pct || 0).toFixed(1) + "%");
+            setText("next-funding", f.next_funding_time ? new Date(f.next_funding_time).toLocaleTimeString() : "--:--");
+
+            // Positions table
+            updatePositions(data.positions || []);
+
+            // Instruments
+            updateInstruments(m.instruments || {});
+
+            // Liquidation gauges
+            updateLiqGauges(w.liquidation_distances || {});
+
+            // Yield calculation
+            let totalYield = 0; let yieldCount = 0;
+            (data.positions || []).forEach(p => {
+                if (p.annualized_yield > 0) { totalYield += p.annualized_yield; yieldCount++; }
+            });
+            setText("annualized-yield", yieldCount > 0 ? (totalYield / yieldCount).toFixed(2) + "%" : "0.00%");
+        }
+
+        function updatePositions(positions) {
+            const tbody = document.getElementById("positions-table");
+            if (!positions.length) {
+                tbody.innerHTML = '<tr><td colspan="10" style="text-align:center; color: var(--text-secondary);">No active positions</td></tr>';
+                return;
+            }
+            tbody.innerHTML = positions.map(p => {
+                const deltaClass = Math.abs(p.delta_pct) < 0.5 ? "delta-ok" :
+                                   Math.abs(p.delta_pct) < 5 ? "delta-warn" : "delta-bad";
+                return `<tr>
+                    <td><strong>${p.symbol}</strong></td>
+                    <td>${p.spot_quantity.toFixed(6)}</td>
+                    <td>$${p.spot_entry_price.toFixed(2)}</td>
+                    <td>$${p.futures_entry_price.toFixed(2)}</td>
+                    <td>${p.current_basis_pct.toFixed(4)}%</td>
+                    <td class="${p.cumulative_funding >= 0 ? 'positive' : 'negative'}">$${p.cumulative_funding.toFixed(6)}</td>
+                    <td class="${p.annualized_yield >= 8 ? 'positive' : p.annualized_yield >= 0 ? '' : 'negative'}">${p.annualized_yield.toFixed(2)}%</td>
+                    <td><span class="delta-indicator ${deltaClass}"></span>${p.delta_pct.toFixed(2)}%</td>
+                    <td>${p.holding_days.toFixed(1)}d</td>
+                    <td>${p.predicted_funding_rate.toFixed(4)}%</td>
+                </tr>`;
+            }).join("");
+        }
+
+        function updateInstruments(instruments) {
+            const grid = document.getElementById("instruments-grid");
+            grid.innerHTML = Object.entries(instruments).map(([sym, inst]) => {
+                const yieldClass = inst.annualized_yield >= 10 ? "positive" :
+                                   inst.annualized_yield >= 0 ? "" : "negative";
+                return `<div class="inst-card">
+                    <div class="inst-header">
+                        <span class="inst-symbol">${sym}</span>
+                        <span class="inst-yield ${yieldClass}">${inst.annualized_yield.toFixed(1)}% APY</span>
+                    </div>
+                    <div class="inst-row"><span>Predicted Rate</span><span>${inst.predicted_funding_rate.toFixed(4)}%</span></div>
+                    <div class="inst-row"><span>24h Avg Rate</span><span>${inst.avg_24h_rate.toFixed(4)}%</span></div>
+                    <div class="inst-row"><span>7d Avg Rate</span><span>${inst.avg_7d_rate.toFixed(4)}%</span></div>
+                    <div class="inst-row"><span>Current Basis</span><span>${inst.current_basis_pct.toFixed(4)}%</span></div>
+                    <div class="inst-row"><span>1h Avg Basis</span><span>${inst.avg_1h_basis.toFixed(4)}%</span></div>
+                    <div class="inst-row"><span>Mark Price</span><span>$${inst.mark_price.toFixed(2)}</span></div>
+                </div>`;
+            }).join("");
+        }
+
+        function updateLiqGauges(distances) {
+            const container = document.getElementById("liq-gauges");
+            if (!Object.keys(distances).length) {
+                container.innerHTML = '<div style="color: var(--text-secondary); font-size: 12px;">No active positions</div>';
+                return;
+            }
+            container.innerHTML = Object.entries(distances).map(([sym, info]) => {
+                const pct = Math.min(info.distance_pct, 100);
+                const cls = info.level === "safe" ? "gauge-safe" :
+                            info.level === "warning" ? "gauge-warning" : "gauge-critical";
+                return `<div style="margin-bottom: 8px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 12px;">
+                        <span>${sym}</span>
+                        <span class="${info.level === 'safe' ? 'positive' : info.level === 'warning' ? 'warning' : 'negative'}">${info.distance_pct.toFixed(1)}%</span>
+                    </div>
+                    <div class="gauge"><div class="gauge-fill ${cls}" style="width: ${pct}%;"></div></div>
+                </div>`;
+            }).join("");
+        }
+
+        function setText(id, val) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val;
+        }
+
+        function setMode(mode) {
+            fetch("/api/config", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({entry_mode: mode})
+            }).then(() => {
+                document.querySelectorAll(".controls .btn:not(.btn-danger)").forEach(b => b.classList.remove("btn-active"));
+                document.getElementById("btn-" + mode).classList.add("btn-active");
+            });
+        }
+
+        function killSwitch() {
+            if (confirm("KILL SWITCH: This will close ALL positions immediately. Continue?")) {
+                fetch("/kill", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({reason: "Manual kill switch from dashboard"})
+                }).then(r => r.json()).then(d => alert("Kill switch executed: " + JSON.stringify(d)));
+            }
+        }
+
+        connectWS();
+        setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 30000);
+    </script>
+</body>
+</html>

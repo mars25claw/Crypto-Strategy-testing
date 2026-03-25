@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  triangular-arb:
+    build:
+      context: ..
+      dockerfile: strat_007_triangular_arb/Dockerfile
+    container_name: strat-007-triangular-arb
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_PORT:-8087}:8087"
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/strat_007_triangular_arb/config.yaml:ro
+      - ./.env:/app/strat_007_triangular_arb/.env:ro
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - TZ=UTC
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8087/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"

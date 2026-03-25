@@ -1,0 +1,178 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# STRAT-002: Funding Rate Arbitrage (Cash-and-Carry) Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+strategy_id: "STRAT-002"
+strategy_name: "Funding Rate Arbitrage"
+mode: "paper"  # "paper" or "live"
+
+instruments:
+  - "BTCUSDT"
+  - "ETHUSDT"
+  - "SOLUSDT"
+  - "BNBUSDT"
+  - "XRPUSDT"
+
+binance:
+  api_key: ""
+  api_secret: ""
+  testnet: false
+  spot_base_url: "https://api.binance.com"
+  futures_base_url: "https://fapi.binance.com"
+  spot_ws_url: "wss://stream.binance.com:9443"
+  futures_ws_url: "wss://fstream.binance.com"
+  recv_window: 5000
+  time_sync_interval: 60
+
+risk:
+  max_capital_pct: 40.0          # 40% of total equity for this strategy
+  max_per_trade_pct: 20.0        # 20% per instrument
+  max_per_asset_pct: 20.0
+  risk_per_trade_pct: 1.5
+  max_leverage: 3
+  preferred_leverage: 2
+  max_concurrent_positions: 5
+  max_long_exposure_pct: 40.0
+  max_short_exposure_pct: 40.0
+  max_net_directional_pct: 1.0   # Should be near zero for delta-neutral
+  daily_drawdown_pct: 1.5
+  weekly_drawdown_pct: 3.0
+  monthly_drawdown_pct: 5.0
+  system_wide_drawdown_pct: 15.0
+
+paper_trading:
+  enabled: true
+  starting_equity: 10000.0
+  maker_fee_pct: 0.02
+  taker_fee_pct: 0.04
+  spot_taker_fee_pct: 0.10
+  slippage_model: "orderbook_walk"
+
+dashboard:
+  host: "0.0.0.0"
+  port: 8082
+  enable_kill_switch: true
+
+alerting:
+  enabled: true
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  discord_webhook_url: ""
+
+database:
+  url: "sqlite:///data/bot.db"
+  echo: false
+
+logging:
+  level: "INFO"
+  log_dir: "data/logs"
+  rotate_days: 30
+  trade_log_permanent: true
+
+state:
+  persistence_interval: 5.0
+  snapshot_count: 3
+  state_dir: "data/state"
+
+memory:
+  check_interval: 60
+  warn_mb: 500
+  restart_mb: 1000
+  max_candles_per_tf: 500
+  cache_clear_hours: 24
+
+heartbeat:
+  interval: 10
+  timeout: 30
+  max_restarts_per_hour: 3
+
+rate_limit_weight_per_min: 150
+rate_limit_burst_weight: 300
+
+# ── Strategy-Specific Parameters ─────────────────────────────────────────────
+strategy_params:
+  # Funding rate thresholds (per 8-hour period, as percentage)
+  entry_mode: "standard"           # "aggressive", "standard", "conservative"
+  threshold_aggressive: 0.18
+  threshold_standard: 0.05
+  threshold_conservative: 0.03
+
+  # Basis spread requirements
+  min_basis_pct: 0.01              # Minimum positive basis to enter
+  basis_contraction_max_pct: 50.0  # Max 4h contraction before rejecting
+
+  # Wallet split
+  spot_wallet_pct: 55.0
+  futures_wallet_pct: 45.0
+  reserve_buffer_pct: 10.0
+
+  # Instrument allocation caps (as % of total equity)
+  allocation_caps:
+    - 20.0   # Instrument 1 (highest yield)
+    - 15.0   # Instrument 2
+    - 10.0   # Instrument 3
+    - 5.0    # Instrument 4
+    - 5.0    # Instrument 5
+
+  # Execution
+  max_execution_window_ms: 100
+  delta_tolerance_pct: 0.5
+  delta_critical_pct: 5.0
+  corrective_order_timeout_s: 5.0
+
+  # Exit conditions
+  negative_funding_threshold: -0.005
+  negative_periods_for_exit: 2
+  low_rate_threshold: 0.01
+  low_rate_periods_for_exit: 3
+  basis_inversion_exit: -0.05
+  max_holding_days: 30
+  profit_target_pct: 5.0
+
+  # Rebalancing
+  rebalance_day: "monday"
+  max_rotations_per_week: 2
+
+  # Liquidation distance thresholds
+  liq_warning_pct: 15.0
+  liq_critical_pct: 10.0
+  liq_emergency_pct: 5.0
+
+  # Circuit breaker parameters
+  basis_flash_inversion_pct: 0.5
+  basis_flash_window_minutes: 5
+  basis_flash_cooldown_hours: 4
+  funding_shock_threshold: -0.2
+  funding_shock_cooldown_hours: 24
+  liquidation_cascade_count: 50
+  liquidation_cascade_window_s: 60
+
+  # Filters
+  min_spot_volume_24h: 50_000_000
+  min_futures_volume_24h: 200_000_000
+  max_spot_spread_pct: 0.05
+  max_futures_spread_pct: 0.03
+  funding_sustainability_periods: 6
+  funding_sustainability_min_above: 3
+
+  # Consecutive loss handling
+  consecutive_loss_reduce_at: 2
+  consecutive_loss_halt_at: 4
+
+  # Pre-funding tactical exit
+  tactical_exit_negative_threshold: -0.1
+
+  # Time-based review
+  daily_review_min_annualized_yield: 8.0
+  daily_review_consecutive_fails: 3
+
+  # Market regime
+  extreme_fear_btc_drop_7d_pct: 15.0
+  extreme_greed_btc_rise_7d_pct: 30.0
+  extreme_greed_size_reduction: 0.5
+
+  # Fee thresholds
+  min_fee_multiple: 3.0
+  spot_taker_fee_pct: 0.10
+  futures_taker_fee_pct: 0.04
+  estimated_slippage_per_leg_pct: 0.02

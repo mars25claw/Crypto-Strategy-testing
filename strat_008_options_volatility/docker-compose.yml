@@ -1,0 +1,33 @@
+version: "3.8"
+
+services:
+  strat-008-options-vol:
+    build:
+      context: ..
+      dockerfile: strat_008_options_volatility/Dockerfile
+    container_name: strat-008-options-vol
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./data:/app/strat_008_options_volatility/data
+      - ./config.yaml:/app/strat_008_options_volatility/config.yaml:ro
+    env_file:
+      - .env
+    environment:
+      - CONFIG_PATH=config.yaml
+      - TZ=UTC
+      - PYTHONUNBUFFERED=1
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
+          memory: 256M
+          cpus: "0.25"

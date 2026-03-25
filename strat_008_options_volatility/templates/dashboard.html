@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ strategy_name }} Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0d1117; color: #c9d1d9; }
+        .header { background: #161b22; border-bottom: 1px solid #30363d; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 18px; color: #58a6ff; }
+        .header .mode { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+        .mode-paper { background: #2ea04326; color: #3fb950; border: 1px solid #238636; }
+        .mode-live { background: #da363326; color: #f85149; border: 1px solid #da3633; }
+        .header .uptime { color: #8b949e; font-size: 13px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; padding: 16px 24px; }
+        .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+        .card h2 { font-size: 14px; color: #8b949e; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .metric-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #21262d; }
+        .metric-row:last-child { border-bottom: none; }
+        .metric-label { color: #8b949e; font-size: 13px; }
+        .metric-value { color: #c9d1d9; font-size: 13px; font-weight: 600; }
+        .positive { color: #3fb950; }
+        .negative { color: #f85149; }
+        .warning { color: #d29922; }
+        .neutral { color: #8b949e; }
+        .regime-badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+        .regime-strong { background: #238636; color: #fff; }
+        .regime-favorable { background: #1f6feb; color: #fff; }
+        .regime-neutral { background: #6e7681; color: #fff; }
+        .regime-unfavorable { background: #da3633; color: #fff; }
+        .full-width { grid-column: 1 / -1; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 8px 6px; color: #8b949e; border-bottom: 1px solid #30363d; font-weight: 500; }
+        td { padding: 8px 6px; border-bottom: 1px solid #21262d; }
+        .greeks-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+        .greek-box { text-align: center; padding: 12px; background: #0d1117; border-radius: 6px; }
+        .greek-label { font-size: 12px; color: #8b949e; }
+        .greek-value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+        .iv-rv-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+        .bar-container { flex: 1; height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; }
+        .bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+        .bar-iv { background: #f0883e; }
+        .bar-rv { background: #58a6ff; }
+        .kill-btn { background: #da3633; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }
+        .kill-btn:hover { background: #f85149; }
+        .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+        .status-active { background: #3fb950; }
+        .status-inactive { background: #6e7681; }
+        #connection-status { font-size: 12px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>{{ strategy_name }}</h1>
+            <span id="connection-status"><span class="status-dot status-inactive"></span>Connecting...</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:16px;">
+            <span class="uptime">Uptime: <span id="uptime">{{ uptime }}</span></span>
+            <span class="mode {% if mode == 'paper' %}mode-paper{% else %}mode-live{% endif %}">
+                {{ mode|upper }}
+            </span>
+            <button class="kill-btn" onclick="killSwitch()">KILL SWITCH</button>
+        </div>
+    </div>
+
+    <div class="grid">
+        <!-- Volatility Regime -->
+        {% for symbol in ['BTCUSDT', 'ETHUSDT'] %}
+        <div class="card">
+            <h2>{{ symbol }} Volatility</h2>
+            <div id="vol-{{ symbol }}">
+                <div class="metric-row">
+                    <span class="metric-label">IV (Implied)</span>
+                    <span class="metric-value" id="iv-{{ symbol }}">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">RV 1d</span>
+                    <span class="metric-value" id="rv1d-{{ symbol }}">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">RV 7d</span>
+                    <span class="metric-value" id="rv7d-{{ symbol }}">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">RV 30d</span>
+                    <span class="metric-value" id="rv30d-{{ symbol }}">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">IV/RV Ratio</span>
+                    <span class="metric-value" id="ratio-{{ symbol }}">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Regime</span>
+                    <span id="regime-{{ symbol }}"><span class="regime-badge regime-neutral">--</span></span>
+                </div>
+                <div style="margin-top:8px;">
+                    <div class="iv-rv-bar">
+                        <span class="metric-label" style="width:30px;">IV</span>
+                        <div class="bar-container"><div class="bar-fill bar-iv" id="bar-iv-{{ symbol }}" style="width:0%"></div></div>
+                    </div>
+                    <div class="iv-rv-bar">
+                        <span class="metric-label" style="width:30px;">RV</span>
+                        <div class="bar-container"><div class="bar-fill bar-rv" id="bar-rv-{{ symbol }}" style="width:0%"></div></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+
+        <!-- Greeks Display -->
+        <div class="card">
+            <h2>Portfolio Greeks</h2>
+            <div class="greeks-grid">
+                <div class="greek-box">
+                    <div class="greek-label">Delta</div>
+                    <div class="greek-value" id="greek-delta">0.00</div>
+                </div>
+                <div class="greek-box">
+                    <div class="greek-label">Gamma</div>
+                    <div class="greek-value" id="greek-gamma">0.000</div>
+                </div>
+                <div class="greek-box">
+                    <div class="greek-label">Theta</div>
+                    <div class="greek-value positive" id="greek-theta">0.00</div>
+                </div>
+                <div class="greek-box">
+                    <div class="greek-label">Vega</div>
+                    <div class="greek-value" id="greek-vega">0.00</div>
+                </div>
+            </div>
+            <div style="margin-top:12px;">
+                <div class="metric-row">
+                    <span class="metric-label">Delta Compliance</span>
+                    <span class="metric-value" id="delta-compliance">--%</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Greek Breaches</span>
+                    <span class="metric-value" id="greek-breaches">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- PnL Attribution -->
+        <div class="card">
+            <h2>PnL Attribution</h2>
+            <div class="metric-row">
+                <span class="metric-label">Covered Calls</span>
+                <span class="metric-value" id="pnl-cc">$0.00</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Cash-Secured Puts</span>
+                <span class="metric-value" id="pnl-csp">$0.00</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Delta-Neutral</span>
+                <span class="metric-value" id="pnl-dn">$0.00</span>
+            </div>
+            <div class="metric-row" style="border-top:2px solid #30363d; padding-top:8px;">
+                <span class="metric-label" style="font-weight:700;">Total PnL</span>
+                <span class="metric-value" style="font-size:16px;" id="pnl-total">$0.00</span>
+            </div>
+            <div style="margin-top:12px;">
+                <div class="metric-row">
+                    <span class="metric-label">Total Premium</span>
+                    <span class="metric-value" id="total-premium">$0.00</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Mode</span>
+                    <span class="metric-value" id="op-mode">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Risk State -->
+        <div class="card">
+            <h2>Risk Management</h2>
+            <div class="metric-row">
+                <span class="metric-label">Capital Deployed</span>
+                <span class="metric-value" id="capital-deployed">$0</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Daily Drawdown</span>
+                <span class="metric-value" id="daily-dd">0%</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Weekly Drawdown</span>
+                <span class="metric-value" id="weekly-dd">0%</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Monthly Drawdown</span>
+                <span class="metric-value" id="monthly-dd">0%</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">IV Spike Alert</span>
+                <span class="metric-value" id="iv-spike">No</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">Flash Crash Alert</span>
+                <span class="metric-value" id="flash-crash">No</span>
+            </div>
+        </div>
+
+        <!-- Active Positions -->
+        <div class="card full-width">
+            <h2>Active Positions</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Symbol</th>
+                        <th>Strike</th>
+                        <th>Premium</th>
+                        <th>IV at Entry</th>
+                        <th>Days Left</th>
+                        <th>Status</th>
+                        <th>PnL</th>
+                    </tr>
+                </thead>
+                <tbody id="positions-table">
+                    <tr><td colspan="8" style="text-align:center;color:#8b949e;">No active positions</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Recent Trades -->
+        <div class="card full-width">
+            <h2>Recent Cycles</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Type</th>
+                        <th>Symbol</th>
+                        <th>Strike</th>
+                        <th>Premium</th>
+                        <th>Exit</th>
+                        <th>PnL</th>
+                    </tr>
+                </thead>
+                <tbody id="trades-table">
+                    <tr><td colspan="7" style="text-align:center;color:#8b949e;">No completed cycles</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const wsUrl = "{{ ws_url }}";
+        let ws = null;
+        let reconnectDelay = 1000;
+
+        function connect() {
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                document.getElementById('connection-status').innerHTML =
+                    '<span class="status-dot status-active"></span>Connected';
+                reconnectDelay = 1000;
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'pong') return;
+                updateDashboard(data);
+            };
+
+            ws.onclose = () => {
+                document.getElementById('connection-status').innerHTML =
+                    '<span class="status-dot status-inactive"></span>Disconnected';
+                setTimeout(connect, reconnectDelay);
+                reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+            };
+
+            ws.onerror = () => { ws.close(); };
+
+            setInterval(() => { if (ws.readyState === 1) ws.send('ping'); }, 15000);
+        }
+
+        function updateDashboard(data) {
+            if (data.uptime) document.getElementById('uptime').textContent = data.uptime;
+
+            const m = data.metrics || {};
+
+            // Volatility
+            const vol = m.volatility || {};
+            ['BTCUSDT', 'ETHUSDT'].forEach(sym => {
+                const v = vol[sym] || {};
+                setVal('iv-' + sym, (v.iv || 0).toFixed(1) + '%');
+                setVal('rv1d-' + sym, (v.rv_1d || 0).toFixed(1) + '%');
+                setVal('rv7d-' + sym, (v.rv_7d || 0).toFixed(1) + '%');
+                setVal('rv30d-' + sym, (v.rv_30d || 0).toFixed(1) + '%');
+                setVal('ratio-' + sym, (v.iv_rv_ratio || 0).toFixed(2));
+
+                const regime = v.regime || 'unknown';
+                const regimeEl = document.getElementById('regime-' + sym);
+                if (regimeEl) {
+                    const cls = regime === 'strong' ? 'regime-strong'
+                        : regime === 'favorable' ? 'regime-favorable'
+                        : regime === 'neutral' ? 'regime-neutral'
+                        : 'regime-unfavorable';
+                    regimeEl.innerHTML = `<span class="regime-badge ${cls}">${regime.toUpperCase()}</span>`;
+                }
+
+                // Bars (scale to 200% max)
+                const maxVol = 200;
+                setWidth('bar-iv-' + sym, Math.min((v.iv || 0) / maxVol * 100, 100));
+                setWidth('bar-rv-' + sym, Math.min((v.rv_7d || 0) / maxVol * 100, 100));
+            });
+
+            // Greeks
+            const g = m.greeks || {};
+            setVal('greek-delta', (g.net_delta || 0).toFixed(4));
+            setVal('greek-gamma', (g.net_gamma || 0).toFixed(5));
+            setVal('greek-theta', (g.net_theta || 0).toFixed(4));
+            setVal('greek-vega', (g.net_vega || 0).toFixed(2));
+            setVal('delta-compliance', (m.delta_compliance_pct || 0).toFixed(1) + '%');
+            setVal('greek-breaches', m.greek_limit_breaches || 0);
+
+            // PnL
+            const pnl = m.pnl_attribution || {};
+            setPnl('pnl-cc', pnl.covered_calls || 0);
+            setPnl('pnl-csp', pnl.cash_secured_puts || 0);
+            setPnl('pnl-dn', pnl.delta_neutral || 0);
+            setPnl('pnl-total', pnl.total || 0);
+            setVal('total-premium', '$' + (m.total_premium_collected || 0).toFixed(2));
+            setVal('op-mode', (m.mode || '--').toUpperCase());
+
+            // Risk
+            const risk = m.risk || {};
+            setVal('capital-deployed', '$' + (risk.total_deployed || 0).toFixed(0));
+            setDd('daily-dd', risk.daily_dd_pct || 0);
+            setDd('weekly-dd', risk.weekly_dd_pct || 0);
+            setDd('monthly-dd', risk.monthly_dd_pct || 0);
+            setVal('iv-spike', risk.iv_spike ? 'ACTIVE' : 'No');
+            setVal('flash-crash', risk.flash_crash ? 'ACTIVE' : 'No');
+
+            if (risk.iv_spike) document.getElementById('iv-spike').classList.add('negative');
+            if (risk.flash_crash) document.getElementById('flash-crash').classList.add('negative');
+
+            // Positions
+            const positions = data.positions || [];
+            const ptBody = document.getElementById('positions-table');
+            if (positions.length === 0) {
+                ptBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#8b949e;">No active positions</td></tr>';
+            } else {
+                ptBody.innerHTML = positions.map(p => `<tr>
+                    <td>${p.type || ''}</td>
+                    <td>${p.symbol || ''}</td>
+                    <td>${(p.strike || 0).toFixed(0)}</td>
+                    <td>$${(p.premium || 0).toFixed(4)}</td>
+                    <td>${(p.iv_at_entry || 0).toFixed(1)}%</td>
+                    <td>${(p.remaining_days || 0).toFixed(1)}</td>
+                    <td>${p.status || ''}</td>
+                    <td class="${(p.realized_pnl || 0) >= 0 ? 'positive' : 'negative'}">$${(p.realized_pnl || 0).toFixed(4)}</td>
+                </tr>`).join('');
+            }
+        }
+
+        function setVal(id, val) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val;
+        }
+
+        function setWidth(id, pct) {
+            const el = document.getElementById(id);
+            if (el) el.style.width = pct + '%';
+        }
+
+        function setPnl(id, val) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = '$' + val.toFixed(4);
+                el.className = 'metric-value ' + (val >= 0 ? 'positive' : 'negative');
+            }
+        }
+
+        function setDd(id, val) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = val.toFixed(2) + '%';
+                el.className = 'metric-value ' + (val > 1 ? 'warning' : val > 3 ? 'negative' : '');
+            }
+        }
+
+        function killSwitch() {
+            if (!confirm('ACTIVATE KILL SWITCH? This will close ALL positions immediately.')) return;
+            fetch('/kill', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({reason: 'Dashboard kill switch triggered'})
+            }).then(r => r.json()).then(d => alert('Kill switch: ' + JSON.stringify(d)));
+        }
+
+        connect();
+    </script>
+</body>
+</html>

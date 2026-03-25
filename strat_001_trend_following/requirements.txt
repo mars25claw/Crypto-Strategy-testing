@@ -1,0 +1,29 @@
+# STRAT-001 Trend Following & Momentum — Dependencies
+# Python 3.11+
+
+# Core async / HTTP
+httpx>=0.25.0,<1.0
+websockets>=12.0,<14.0
+
+# Numeric / indicators
+numpy>=1.24.0,<2.0
+
+# Configuration
+pyyaml>=6.0
+
+# Database
+sqlalchemy>=2.0,<3.0
+
+# Dashboard
+fastapi>=0.104.0,<1.0
+uvicorn[standard]>=0.24.0,<1.0
+jinja2>=3.1.0,<4.0
+
+# Monitoring
+psutil>=5.9.0,<6.0
+
+# Alerting (optional channels)
+python-telegram-bot>=20.0,<22.0
+
+# Scheduling
+apscheduler>=3.10.0,<4.0

@@ -1,0 +1,183 @@
+################################################################################
+# STRAT-008: Options & Volatility Strategies — Configuration
+################################################################################
+
+strategy_id: "STRAT-008"
+strategy_name: "Options & Volatility Strategies"
+mode: "paper"                         # "paper" or "live"
+
+instruments:
+  - "BTCUSDT"
+  - "ETHUSDT"
+
+# ── Binance ───────────────────────────────────────────────────────────────────
+binance:
+  api_key: ""                         # set via BINANCE_API_KEY env var
+  api_secret: ""                      # set via BINANCE_API_SECRET env var
+  testnet: false
+  spot_base_url: "https://api.binance.com"
+  futures_base_url: "https://fapi.binance.com"
+  spot_ws_url: "wss://stream.binance.com:9443"
+  futures_ws_url: "wss://fstream.binance.com"
+  recv_window: 5000
+
+# ── Deribit (optional) ───────────────────────────────────────────────────────
+deribit:
+  enabled: false                      # set true + credentials for Full mode
+  api_key: ""                         # set via DERIBIT_API_KEY env var
+  api_secret: ""                      # set via DERIBIT_API_SECRET env var
+  base_url: "https://www.deribit.com"
+  ws_url: "wss://www.deribit.com/ws/api/v2"
+  testnet: false
+
+# ── Risk management ──────────────────────────────────────────────────────────
+risk:
+  max_capital_pct: 25.0               # max 25% of equity for this strategy
+  max_per_trade_pct: 5.0
+  risk_per_trade_pct: 1.5
+  max_leverage: 3
+  preferred_leverage: 1
+  max_concurrent_positions: 8
+  max_per_asset_pct: 15.0
+  max_long_exposure_pct: 25.0
+  max_short_exposure_pct: 25.0
+  max_net_directional_pct: 20.0
+  daily_drawdown_pct: 2.0
+  weekly_drawdown_pct: 4.0
+  monthly_drawdown_pct: 7.0
+  system_wide_drawdown_pct: 15.0
+
+# ── Paper trading ────────────────────────────────────────────────────────────
+paper_trading:
+  enabled: true
+  starting_equity: 10000.0
+  maker_fee_pct: 0.02
+  taker_fee_pct: 0.04
+  slippage_model: "orderbook_walk"
+
+# ── Dashboard ────────────────────────────────────────────────────────────────
+dashboard:
+  host: "0.0.0.0"
+  port: 8088
+  enable_kill_switch: true
+
+# ── Alerting ─────────────────────────────────────────────────────────────────
+alerting:
+  enabled: false
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+
+# ── Database ─────────────────────────────────────────────────────────────────
+database:
+  url: "sqlite:///data/bot.db"
+  echo: false
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+logging:
+  level: "INFO"
+  log_dir: "data/logs"
+  rotate_days: 30
+  trade_log_permanent: true
+
+# ── State persistence ────────────────────────────────────────────────────────
+state:
+  persistence_interval: 5.0
+  snapshot_count: 3
+  state_dir: "data/state"
+
+# ── Memory management ────────────────────────────────────────────────────────
+memory:
+  check_interval: 60
+  warn_mb: 500
+  restart_mb: 1000
+  max_candles_per_tf: 500
+  cache_clear_hours: 24
+
+# ── Heartbeat ────────────────────────────────────────────────────────────────
+heartbeat:
+  interval: 10
+  timeout: 30
+  max_restarts_per_hour: 3
+
+# ── Rate limiting ────────────────────────────────────────────────────────────
+rate_limit_weight_per_min: 100
+rate_limit_burst_weight: 200
+
+# ── Strategy-specific parameters ─────────────────────────────────────────────
+strategy_params:
+  # Black-Scholes
+  risk_free_rate: 0.05                # 5% annualized
+
+  # Volatility regime thresholds
+  iv_rv_favorable: 1.3                # IV/RV > 1.3 = favorable
+  iv_rv_strong: 1.5                   # IV/RV > 1.5 = strongly overpriced
+  iv_rv_neutral_low: 1.1              # IV/RV 1.1-1.3 = neutral, reduce
+  iv_rv_no_sell: 1.0                  # IV/RV < 1.0 = no selling
+
+  # IV synthetic estimation
+  iv_synthetic_factor: 1.75           # adjustment factor (1.5-2.0 range)
+
+  # Covered call parameters (Sub-A)
+  cc_otm_pct_default: 0.05           # 5% OTM default
+  cc_otm_pct_high_iv: 0.08           # 8% OTM when IV > 80%
+  cc_iv_high_threshold: 80.0          # IV threshold for wider strikes
+  cc_max_allocation_pct: 15.0         # max 15% of equity
+
+  # Cash-secured put parameters (Sub-B)
+  csp_otm_pct_default: 0.05          # 5% OTM default
+  csp_otm_pct_min: 0.03              # 3% OTM minimum
+  csp_max_allocation_pct: 10.0        # max 10% of equity
+  csp_rsi_floor: 40                   # don't sell puts if RSI < 40
+
+  # Delta-neutral parameters (Sub-C)
+  dn_iv_rv_threshold: 1.4             # IV/RV must exceed for entry
+  dn_delta_rebal_threshold: 0.10      # rebalance when delta > +/-0.10
+  dn_delta_target: 0.03               # target delta within +/-0.03
+  dn_max_rebalances_per_day: 20
+  dn_time_exit_pct: 0.50              # close 50% at 50% time elapsed
+  dn_profit_target_pct: 0.60          # close at 60% max profit
+  dn_stop_loss_multiple: 1.0          # stop if loss > 1x premium
+  dn_max_allocation_pct: 15.0
+
+  # Cycle management
+  option_cycle_days: 7                # 7-day expiration cycles
+  min_dte: 3                          # minimum days to expiration
+  max_dte: 30                         # maximum days to expiration
+
+  # Greek limits (Deribit mode)
+  max_net_delta_per_10k: 0.15
+  max_gamma_per_premium: -0.005
+  max_vega_per_iv_point: -500.0
+
+  # Event risk
+  event_tighten_hours: 24             # tighten delta hedges within 24h
+  event_close_hours: 2                # close 50% vol positions within 2h
+
+  # Circuit breakers
+  iv_spike_threshold_pp: 20.0         # 20 percentage points in 4h
+  flash_crash_pct: 8.0                # 8% drop in 1h
+  iv_spike_window_hours: 4
+  flash_crash_window_minutes: 60
+
+  # Consecutive loss handling
+  max_consecutive_losses: 3
+  loss_halt_days: 14
+
+  # ADX filter for covered calls
+  adx_strong_trend: 30
+
+  # Crash filter for put selling
+  crash_7d_pct: 10.0
+  crash_rsi_floor: 30
+
+  # Deribit liquidity filter
+  min_bid_ask_spread_pct: 5.0
+  min_open_interest: 100
+
+  # Paper trading go-live criteria (90-day minimum)
+  paper_min_days: 90
+  paper_min_sharpe: 1.0
+  paper_min_profit_factor: 1.3
+  paper_max_drawdown_pct: 5.0
+  paper_delta_compliance_pct: 90.0
+  paper_premium_to_hedge_ratio: 2.0

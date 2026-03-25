@@ -1,0 +1,234 @@
+# =============================================================================
+# STRAT-001: Trend Following & Momentum Capture — Configuration
+# =============================================================================
+
+strategy_id: "STRAT-001"
+strategy_name: "Trend Following & Momentum"
+mode: "paper"   # "paper" or "live"
+
+instruments:
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+  - BNBUSDT
+  - XRPUSDT
+  - ADAUSDT
+  - AVAXUSDT
+  - DOGEUSDT
+  - LINKUSDT
+  - DOTUSDT
+
+# ── Binance connectivity ────────────────────────────────────────────────────
+binance:
+  api_key: ""          # Override via BINANCE_API_KEY env var
+  api_secret: ""       # Override via BINANCE_API_SECRET env var
+  testnet: false
+  futures_base_url: "https://fapi.binance.com"
+  futures_ws_url: "wss://fstream.binance.com"
+  recv_window: 5000
+  time_sync_interval: 60
+
+# ── Risk management ─────────────────────────────────────────────────────────
+risk:
+  max_capital_pct: 30.0
+  max_per_trade_pct: 5.0
+  risk_per_trade_pct: 1.5
+  max_leverage: 5
+  preferred_leverage: 3
+  max_concurrent_positions: 5
+  max_per_asset_pct: 10.0
+  max_long_exposure_pct: 25.0
+  max_short_exposure_pct: 25.0
+  max_net_directional_pct: 20.0
+  daily_drawdown_pct: 3.0
+  weekly_drawdown_pct: 6.0
+  monthly_drawdown_pct: 10.0
+  system_wide_drawdown_pct: 15.0
+
+# ── Paper trading ───────────────────────────────────────────────────────────
+paper_trading:
+  enabled: true
+  starting_equity: 10000.0
+  maker_fee_pct: 0.02
+  taker_fee_pct: 0.04
+  slippage_model: "orderbook_walk"
+
+# ── Dashboard ───────────────────────────────────────────────────────────────
+dashboard:
+  host: "0.0.0.0"
+  port: 8081
+  enable_kill_switch: true
+
+# ── Alerting ────────────────────────────────────────────────────────────────
+alerting:
+  enabled: true
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  discord_webhook_url: ""
+
+# ── Database ────────────────────────────────────────────────────────────────
+database:
+  url: "sqlite:///data/strat_001.db"
+  echo: false
+
+# ── Logging ─────────────────────────────────────────────────────────────────
+logging:
+  level: "INFO"
+  log_dir: "data/logs"
+  rotate_days: 30
+  trade_log_permanent: true
+
+# ── State persistence ───────────────────────────────────────────────────────
+state:
+  persistence_interval: 5.0
+  snapshot_count: 3
+  state_dir: "data/state"
+
+# ── Memory management ──────────────────────────────────────────────────────
+memory:
+  check_interval: 60
+  warn_mb: 500
+  restart_mb: 1000
+  max_candles_per_tf: 500
+  cache_clear_hours: 24
+
+# ── Heartbeat ───────────────────────────────────────────────────────────────
+heartbeat:
+  interval: 10
+  timeout: 30
+  max_restarts_per_hour: 3
+
+# ── Rate limiter budget ─────────────────────────────────────────────────────
+rate_limit_weight_per_min: 200
+rate_limit_burst_weight: 400
+
+# ── Strategy-specific parameters ────────────────────────────────────────────
+strategy_params:
+  # EMA crossover
+  fast_ema_period: 20
+  slow_ema_period: 50
+  trend_ema_period: 200
+
+  # Daily alignment
+  daily_fast_ema: 50
+  daily_slow_ema: 200
+
+  # MACD
+  macd_fast: 12
+  macd_slow: 26
+  macd_signal: 9
+
+  # RSI
+  rsi_period: 14
+  rsi_long_min: 50
+  rsi_long_max: 75
+  rsi_short_min: 25
+  rsi_short_max: 50
+  rsi_overbought: 80
+  rsi_oversold: 20
+
+  # ADX
+  adx_period: 14
+  adx_strong: 25
+  adx_weak_low: 20
+  adx_weak_high: 25
+  adx_reject_below: 20
+
+  # ATR
+  atr_period: 14
+
+  # Volume
+  volume_avg_period: 20
+  volume_strong_multiplier: 1.5
+  volume_weak_low: 1.0
+  volume_weak_high: 1.5
+  volume_manipulation_pct: 40
+
+  # Entry timing
+  pullback_max_candles_4h: 3   # 12 hours
+  pullback_cancel_atr_mult: 1.5
+  limit_order_timeout_s: 30
+  max_limit_attempts: 3
+  bracket_order_deadline_ms: 500
+
+  # Stop loss
+  hard_stop_atr_mult: 2.0
+
+  # Trailing stop
+  trailing_activation_atr: 1.0
+  trailing_distance_atr: 1.5
+  trailing_step_atr: 0.1
+  trailing_cancel_replace_ms: 200
+
+  # Take profit tranches
+  tp1_atr_mult: 1.0
+  tp1_pct: 25
+  tp2_atr_mult: 2.0
+  tp2_pct: 25
+  tp3_atr_mult: 3.0
+  tp3_pct: 25
+  tp4_pct: 25    # rides trailing
+
+  # Time exit
+  max_trade_days: 10
+  no_tp1_close_pct: 50
+  no_tp1_days: 5
+  extension_days: 5
+  extension_adx_min: 30
+
+  # Scaling
+  max_scale_ins: 2
+  scale_in_1_pct: 50
+  scale_in_2_pct: 25
+
+  # Kelly criterion
+  kelly_min_trades: 100
+  kelly_recalc_interval: 20
+  kelly_fraction: 0.5   # half-Kelly
+  kelly_floor_pct: 0.25
+  kelly_ceiling_pct: 3.0
+
+  # Leverage
+  high_vol_atr_pct: 3.0
+  extreme_vol_atr_pct: 5.0
+
+  # Drawdown recovery
+  dd_recovery_trades: 5
+  dd_recovery_size_pct: 75
+
+  # Filters
+  spread_max_pct: 0.1
+  whipsaw_cooldown_candles_4h: 2   # 8 hours
+  whipsaw_max_per_week: 3
+  whipsaw_suspend_days: 7
+  consecutive_loss_reduce_3: 25
+  consecutive_loss_reduce_5: 50
+  consecutive_loss_halt_7: true
+  fee_multiplier: 3
+  correlation_threshold: 0.75
+  correlation_max_same_dir: 2
+  news_pre_event_hours: 2
+  news_post_event_hours: 1
+  hurst_reject_below: 0.45
+  hurst_reduce_below: 0.55
+  oi_divergence_size_pct: 50
+
+  # Circuit breakers
+  flash_crash_pct: 10.0
+  flash_crash_minutes: 5
+  flash_crash_cooldown_hours: 2
+  spread_halt_pct: 0.5
+  spread_close_pct: 1.0
+  ws_latency_halt_ms: 5000
+  api_fail_halt_count: 3
+  balance_discrepancy_pct: 1.0
+
+  # Paper trading go-live criteria
+  paper_min_days: 60
+  paper_min_trades: 50
+  paper_min_win_rate: 35.0
+  paper_min_profit_factor: 1.3
+  paper_max_drawdown: 12.0
+  paper_min_sharpe: 0.8
+  paper_max_single_loss_pct: 2.5
+  paper_min_uptime_pct: 95.0

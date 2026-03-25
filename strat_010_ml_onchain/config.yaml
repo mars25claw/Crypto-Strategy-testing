@@ -1,0 +1,201 @@
+# =============================================================================
+# STRAT-010: ML & On-Chain Quantitative Models
+# =============================================================================
+
+strategy_id: "STRAT-010"
+strategy_name: "ML & On-Chain Quantitative Models"
+mode: "paper"  # "paper" or "live"
+
+instruments:
+  - "BTCUSDT"
+  - "ETHUSDT"
+  - "SOLUSDT"
+
+binance:
+  testnet: false
+  spot_base_url: "https://api.binance.com"
+  futures_base_url: "https://fapi.binance.com"
+  spot_ws_url: "wss://stream.binance.com:9443"
+  futures_ws_url: "wss://fstream.binance.com"
+  recv_window: 5000
+  time_sync_interval: 60
+
+risk:
+  max_capital_pct: 20.0
+  max_per_trade_pct: 4.0
+  risk_per_trade_pct: 1.5
+  max_leverage: 5
+  preferred_leverage: 3
+  max_concurrent_positions: 3
+  max_per_asset_pct: 10.0
+  max_long_exposure_pct: 20.0
+  max_short_exposure_pct: 20.0
+  max_net_directional_pct: 15.0
+  daily_drawdown_pct: 3.0
+  weekly_drawdown_pct: 5.0
+  monthly_drawdown_pct: 8.0
+  system_wide_drawdown_pct: 15.0
+
+paper_trading:
+  enabled: true
+  starting_equity: 10000.0
+  maker_fee_pct: 0.02
+  taker_fee_pct: 0.04
+  slippage_model: "orderbook_walk"
+
+dashboard:
+  host: "0.0.0.0"
+  port: 8089
+  enable_kill_switch: true
+
+alerting:
+  enabled: true
+
+database:
+  url: "sqlite:///data/strat010.db"
+  echo: false
+
+logging:
+  level: "INFO"
+  log_dir: "data/logs"
+  rotate_days: 30
+  trade_log_permanent: true
+
+state:
+  persistence_interval: 5.0
+  snapshot_count: 3
+  state_dir: "data/state"
+
+memory:
+  check_interval: 60
+  warn_mb: 1000
+  restart_mb: 1500
+  max_candles_per_tf: 500
+  cache_clear_hours: 24
+
+heartbeat:
+  interval: 10
+  timeout: 30
+  max_restarts_per_hour: 3
+
+rate_limit_weight_per_min: 200
+rate_limit_burst_weight: 500
+
+# ---------------------------------------------------------------------------
+# Strategy-specific parameters
+# ---------------------------------------------------------------------------
+strategy_params:
+  # -- Model configuration --
+  model_dir: "models/"
+  xgboost_model_file: "xgboost_model.json"
+  lstm_model_file: "lstm_model.pt"
+  xgboost_weight: 0.60
+  lstm_weight: 0.40
+
+  # -- Signal thresholds --
+  long_threshold: 0.65
+  short_threshold: 0.35
+  high_confidence_long: 0.75
+  high_confidence_short: 0.25
+  uncertainty_low: 0.40
+  uncertainty_high: 0.60
+
+  # -- Signal persistence --
+  signal_persistence_hours: 2
+
+  # -- Trend alignment --
+  ema_fast_period: 20
+  ema_slow_period: 50
+  trend_timeframe: "4h"
+
+  # -- Volatility --
+  atr_period: 14
+  min_atr_pct: 0.5
+
+  # -- Take profit / Stop loss --
+  tp_tranche1_pct: 0.30
+  tp_tranche1_atr_mult: 1.5
+  tp_tranche2_pct: 0.30
+  tp_tranche2_atr_mult: 3.0
+  tp_tranche3_pct: 0.40
+  trailing_activation_atr_mult: 2.0
+  trailing_distance_atr_mult: 1.5
+  hard_stop_atr_mult: 2.0
+  max_holding_hours: 48
+  tighten_stop_hours: 24
+  tighten_stop_atr_mult: 1.0
+
+  # -- Feature engineering --
+  feature_count: 35
+  min_features_available: 25
+  z_score_window: 180
+  lag_count: 3
+  total_feature_count: 140
+
+  # -- Model freshness --
+  model_max_age_days: 30
+  model_halt_age_days: 60
+  retrain_interval_days: 30
+
+  # -- Performance sizing --
+  rolling_accuracy_window: 50
+  accuracy_full_threshold: 0.60
+  accuracy_reduce_threshold: 0.55
+  accuracy_halt_threshold: 0.50
+
+  # -- Confidence sizing --
+  high_confidence_size_mult: 1.0
+  moderate_confidence_size_mult: 0.60
+
+  # -- Whipsaw protection --
+  whipsaw_delay_hours: 4
+
+  # -- Consecutive loss handling --
+  consec_loss_reduce_count: 4
+  consec_loss_halt_count: 6
+
+  # -- Rolling Sharpe --
+  rolling_sharpe_window: 30
+  rolling_sharpe_reduce_threshold: 0.5
+  rolling_sharpe_recover_threshold: 1.0
+
+  # -- Circuit breakers --
+  max_inference_failures: 3
+  data_source_stale_hours: 24
+  data_source_halt_count: 3
+
+  # -- LSTM config --
+  lstm_sequence_length: 24
+  lstm_input_features: 35
+  lstm_hidden_size: 64
+  lstm_num_layers: 2
+  lstm_timeout_seconds: 5
+
+  # -- Order execution --
+  limit_order_timeout_seconds: 30
+
+  # -- Feature freshness --
+  technical_freshness_seconds: 300
+  onchain_freshness_hours: 4
+  sentiment_freshness_hours: 12
+
+  # -- Feature anomaly --
+  anomaly_sigma_threshold: 2.0
+
+  # -- Leverage --
+  high_volatility_atr_pct: 3.0
+  high_volatility_leverage: 2
+
+  # -- On-chain data --
+  onchain_cache_dir: "data/onchain_cache"
+  onchain_forward_fill_hours: 72
+
+  # -- External API keys (loaded from .env) --
+  glassnode_api_key: ""
+  lunarcrush_api_key: ""
+  cryptocompare_api_key: ""
+
+  # -- Warm-up --
+  warmup_candles: 200
+  warmup_onchain_days: 30
+  warmup_timeout_seconds: 300

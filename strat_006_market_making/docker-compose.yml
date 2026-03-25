@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  strat-006-market-making:
+    build:
+      context: ..
+      dockerfile: strat_006_market_making/Dockerfile
+    container_name: strat-006-market-making
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - CONFIG_PATH=config.yaml
+      - TZ=UTC
+    ports:
+      - "8086:8086"
+    volumes:
+      - ./data:/app/strat_006_market_making/data
+      - ./config.yaml:/app/strat_006_market_making/config.yaml:ro
+    mem_limit: 1g
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8086/health'); r.raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STRAT-004 Mean Reversion Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0a0e17; color: #e0e6ed; font-size: 14px; }
+
+        .header { background: linear-gradient(135deg, #1a1f36 0%, #0f1629 100%); padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2a3050; }
+        .header h1 { font-size: 20px; font-weight: 600; }
+        .header h1 span { color: #7c8aff; }
+        .mode-badge { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
+        .mode-paper { background: #2d3a5c; color: #7c8aff; }
+        .mode-live { background: #1a3a2a; color: #4ade80; }
+        .header-meta { display: flex; gap: 20px; font-size: 12px; color: #8892a4; }
+
+        .container { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; padding: 16px; max-width: 1600px; margin: 0 auto; }
+        .full-width { grid-column: 1 / -1; }
+        .half-width { grid-column: span 2; }
+        .quarter-width { grid-column: span 1; }
+
+        .card { background: #111827; border: 1px solid #1e2942; border-radius: 8px; padding: 16px; }
+        .card-title { font-size: 13px; font-weight: 600; color: #8892a4; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }
+
+        .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+        .metric { text-align: center; }
+        .metric-value { font-size: 24px; font-weight: 700; }
+        .metric-label { font-size: 11px; color: #6b7280; margin-top: 2px; }
+        .metric-value.green { color: #4ade80; }
+        .metric-value.red { color: #f87171; }
+        .metric-value.blue { color: #7c8aff; }
+        .metric-value.yellow { color: #fbbf24; }
+
+        /* Regime status */
+        .regime-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+        .regime-card { background: #0f1629; border: 1px solid #1e2942; border-radius: 6px; padding: 12px; text-align: center; }
+        .regime-symbol { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+        .regime-state { padding: 3px 10px; border-radius: 10px; font-size: 11px; font-weight: 600; display: inline-block; }
+        .regime-AGGRESSIVE { background: #064e3b; color: #34d399; }
+        .regime-STANDARD { background: #1e3a5f; color: #60a5fa; }
+        .regime-PAUSE { background: #3b3520; color: #fbbf24; }
+        .regime-DISABLE { background: #3b1c1c; color: #f87171; }
+        .regime-detail { font-size: 11px; color: #6b7280; margin-top: 6px; }
+
+        /* Z-Score gauge */
+        .zscore-gauge { display: flex; align-items: center; justify-content: center; flex-direction: column; padding: 10px; }
+        .gauge-bar { width: 100%; height: 24px; background: linear-gradient(to right, #f87171, #fbbf24, #4ade80, #fbbf24, #f87171); border-radius: 12px; position: relative; margin: 8px 0; }
+        .gauge-marker { position: absolute; top: -4px; width: 4px; height: 32px; background: white; border-radius: 2px; transform: translateX(-50%); }
+        .gauge-labels { display: flex; justify-content: space-between; width: 100%; font-size: 10px; color: #6b7280; }
+        .zscore-value { font-size: 28px; font-weight: 700; }
+
+        /* Signal agreement */
+        .signal-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #1e2942; }
+        .signal-row:last-child { border-bottom: none; }
+        .signal-indicator { width: 10px; height: 10px; border-radius: 50%; }
+        .signal-on { background: #4ade80; }
+        .signal-off { background: #374151; }
+        .signal-name { flex: 1; font-size: 13px; }
+        .signal-val { font-size: 13px; font-weight: 600; }
+
+        /* Positions table */
+        table { width: 100%; border-collapse: collapse; }
+        th { font-size: 11px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 12px; text-align: left; border-bottom: 1px solid #1e2942; }
+        td { padding: 10px 12px; border-bottom: 1px solid #111827; font-size: 13px; }
+        .dir-long { color: #4ade80; font-weight: 600; }
+        .dir-short { color: #f87171; font-weight: 600; }
+
+        /* Tranche progress */
+        .tranche-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: #1e2942; }
+        .tranche-fill { height: 100%; }
+        .tranche-1 { background: #4ade80; }
+        .tranche-2 { background: #60a5fa; }
+        .tranche-3 { background: #a78bfa; }
+
+        /* Alerts */
+        .alert { padding: 8px 12px; margin-bottom: 6px; border-radius: 4px; font-size: 12px; display: flex; gap: 8px; align-items: center; }
+        .alert-critical { background: #3b1c1c; border-left: 3px solid #f87171; }
+        .alert-warning { background: #3b3520; border-left: 3px solid #fbbf24; }
+        .alert-info { background: #1e2942; border-left: 3px solid #7c8aff; }
+        .alert-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+        .alert-critical .alert-dot { background: #f87171; }
+        .alert-warning .alert-dot { background: #fbbf24; }
+        .alert-info .alert-dot { background: #7c8aff; }
+
+        #connection-status { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f87171; margin-right: 6px; }
+        #connection-status.connected { background: #4ade80; }
+
+        .bb-chart { width: 100%; height: 200px; position: relative; }
+        .bb-chart canvas { width: 100%; height: 100%; }
+
+        .empty-state { text-align: center; padding: 24px; color: #4b5563; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1><span>STRAT-004</span> Mean Reversion</h1>
+        </div>
+        <div class="header-meta">
+            <span><span id="connection-status"></span> <span id="ws-status">Disconnected</span></span>
+            <span class="mode-badge mode-{{ mode }}">{{ mode }}</span>
+            <span>Uptime: <span id="uptime">{{ uptime }}</span></span>
+            <span>RAM: <span id="memory">{{ memory_mb }}</span> MB</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Row 1: Key metrics -->
+        <div class="card full-width">
+            <div class="card-title">Performance Overview</div>
+            <div class="metric-grid">
+                <div class="metric">
+                    <div class="metric-value" id="total-pnl">--</div>
+                    <div class="metric-label">Total PnL (USDT)</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value blue" id="win-rate">--</div>
+                    <div class="metric-label">Win Rate</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" id="trades-count">--</div>
+                    <div class="metric-label">Total Trades</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value blue" id="active-positions">--</div>
+                    <div class="metric-label">Active Positions</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value yellow" id="pending-signals">--</div>
+                    <div class="metric-label">Pending Signals</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" id="tradeable-count">--</div>
+                    <div class="metric-label">Tradeable Instruments</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" id="signals-generated">--</div>
+                    <div class="metric-label">Signals Generated</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" id="signals-confirmed">--</div>
+                    <div class="metric-label">Signals Confirmed</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Row 2: Regime status -->
+        <div class="card full-width">
+            <div class="card-title">Regime Classification (Hurst + ADX)</div>
+            <div class="regime-grid" id="regime-grid">
+                <div class="empty-state">Waiting for regime data...</div>
+            </div>
+        </div>
+
+        <!-- Row 3: Z-Score gauges + Signal agreement -->
+        <div class="card half-width">
+            <div class="card-title">Z-Score Gauges</div>
+            <div id="zscore-gauges">
+                <div class="empty-state">Waiting for indicator data...</div>
+            </div>
+        </div>
+
+        <div class="card half-width">
+            <div class="card-title">Signal Agreement</div>
+            <div id="signal-agreement">
+                <div class="empty-state">No active signals</div>
+            </div>
+        </div>
+
+        <!-- Row 4: Positions -->
+        <div class="card full-width">
+            <div class="card-title">Active Positions</div>
+            <div id="positions-table">
+                <div class="empty-state">No open positions</div>
+            </div>
+        </div>
+
+        <!-- Row 5: Risk + Alerts -->
+        <div class="card half-width">
+            <div class="card-title">Risk Status</div>
+            <div id="risk-status">
+                <div class="metric-grid">
+                    <div class="metric">
+                        <div class="metric-value" id="drawdown-pct">--</div>
+                        <div class="metric-label">Drawdown</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value" id="consec-losses">--</div>
+                        <div class="metric-label">Consec. Losses</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value" id="exposure-pct">--</div>
+                        <div class="metric-label">Exposure</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value" id="blacklist-count">--</div>
+                        <div class="metric-label">Blacklisted</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card half-width">
+            <div class="card-title">Alerts</div>
+            <div id="alerts-container" style="max-height: 200px; overflow-y: auto;">
+                <div class="empty-state">No alerts</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // WebSocket connection
+        const wsUrl = "{{ ws_url }}";
+        let ws = null;
+        let reconnectTimer = null;
+
+        function connectWebSocket() {
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                document.getElementById('connection-status').className = 'connected';
+                document.getElementById('ws-status').textContent = 'Connected';
+                if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+            };
+
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'update') updateDashboard(data);
+                } catch(e) { console.error('Parse error:', e); }
+            };
+
+            ws.onclose = function() {
+                document.getElementById('connection-status').className = '';
+                document.getElementById('ws-status').textContent = 'Disconnected';
+                if (!reconnectTimer) reconnectTimer = setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = function() { ws.close(); };
+        }
+
+        function updateDashboard(data) {
+            // Uptime & memory
+            if (data.uptime) document.getElementById('uptime').textContent = data.uptime;
+            if (data.memory_mb) document.getElementById('memory').textContent = data.memory_mb;
+
+            // Metrics
+            const m = data.metrics || {};
+            setText('total-pnl', formatPnl(m.total_pnl));
+            colorPnl('total-pnl', m.total_pnl);
+            setText('win-rate', (m.win_rate || 0).toFixed(1) + '%');
+            setText('trades-count', m.trades_completed || 0);
+            setText('active-positions', m.active_positions || 0);
+            setText('pending-signals', m.pending_signals || 0);
+            setText('tradeable-count', data.tradeable_count || m.tradeable_count || 0);
+            setText('signals-generated', m.signals_generated || 0);
+            setText('signals-confirmed', m.signals_confirmed || 0);
+
+            // Regime grid
+            if (data.regimes) renderRegimes(data.regimes);
+
+            // Z-Score gauges
+            if (data.indicators) renderZscoreGauges(data.indicators);
+
+            // Pending signals
+            if (data.pending_signals) renderSignals(data.pending_signals);
+
+            // Positions
+            if (data.positions) renderPositions(data.positions);
+
+            // Risk
+            if (data.risk_status) renderRisk(data.risk_status);
+
+            // Alerts
+            if (data.alerts) renderAlerts(data.alerts);
+        }
+
+        function renderRegimes(regimes) {
+            const grid = document.getElementById('regime-grid');
+            if (!regimes || Object.keys(regimes).length === 0) {
+                grid.innerHTML = '<div class="empty-state">No regime data</div>';
+                return;
+            }
+            let html = '';
+            for (const [sym, r] of Object.entries(regimes)) {
+                html += `
+                    <div class="regime-card">
+                        <div class="regime-symbol">${sym}</div>
+                        <div class="regime-state regime-${r.state}">${r.state}</div>
+                        <div class="regime-detail">
+                            H: ${(r.hurst || 0).toFixed(3)} | ADX: ${(r.adx || 0).toFixed(1)}
+                        </div>
+                        <div class="regime-detail">
+                            Size mult: ${(r.size_multiplier || 0).toFixed(2)}x
+                        </div>
+                    </div>`;
+            }
+            grid.innerHTML = html;
+        }
+
+        function renderZscoreGauges(indicators) {
+            const container = document.getElementById('zscore-gauges');
+            if (!indicators || Object.keys(indicators).length === 0) {
+                container.innerHTML = '<div class="empty-state">No indicator data</div>';
+                return;
+            }
+            let html = '';
+            for (const [sym, ind] of Object.entries(indicators)) {
+                const z = ind.zscore || 0;
+                // Map Z from -4 to +4 onto 0-100%
+                const pct = Math.max(0, Math.min(100, ((z + 4) / 8) * 100));
+                const color = Math.abs(z) > 2 ? (z > 0 ? '#f87171' : '#4ade80') : '#fbbf24';
+                html += `
+                    <div class="zscore-gauge">
+                        <div style="display:flex;justify-content:space-between;width:100%;">
+                            <span style="font-weight:600;">${sym}</span>
+                            <span class="zscore-value" style="color:${color}">${z.toFixed(2)}</span>
+                        </div>
+                        <div class="gauge-bar">
+                            <div class="gauge-marker" style="left:${pct}%"></div>
+                        </div>
+                        <div class="gauge-labels">
+                            <span>-4.0</span><span>-2.0</span><span>0</span><span>+2.0</span><span>+4.0</span>
+                        </div>
+                        <div style="font-size:11px;color:#6b7280;margin-top:4px;">
+                            RSI: ${(ind.rsi || 0).toFixed(1)} | BB Mid: ${(ind.bb_middle || 0).toFixed(2)}
+                        </div>
+                    </div>`;
+            }
+            container.innerHTML = html;
+        }
+
+        function renderSignals(signals) {
+            const container = document.getElementById('signal-agreement');
+            if (!signals || signals.length === 0) {
+                container.innerHTML = '<div class="empty-state">No active signals</div>';
+                return;
+            }
+            let html = '';
+            for (const sig of signals) {
+                html += `
+                    <div style="margin-bottom:12px;padding:10px;background:#0f1629;border-radius:6px;">
+                        <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+                            <strong>${sig.symbol} ${sig.direction}</strong>
+                            <span style="color:${sig.strength_pct >= 100 ? '#4ade80' : '#fbbf24'}">${sig.strength_pct}%</span>
+                        </div>
+                        <div class="signal-row">
+                            <div class="signal-indicator ${sig.bb ? 'signal-on' : 'signal-off'}"></div>
+                            <span class="signal-name">Bollinger Bands</span>
+                            <span class="signal-val">${sig.bb ? 'YES' : 'NO'}</span>
+                        </div>
+                        <div class="signal-row">
+                            <div class="signal-indicator ${sig.zscore ? 'signal-on' : 'signal-off'}"></div>
+                            <span class="signal-name">Z-Score</span>
+                            <span class="signal-val">${(sig.zscore_value || 0).toFixed(2)}</span>
+                        </div>
+                        <div class="signal-row">
+                            <div class="signal-indicator ${sig.rsi ? 'signal-on' : 'signal-off'}"></div>
+                            <span class="signal-name">RSI</span>
+                            <span class="signal-val">${(sig.rsi_value || 0).toFixed(1)}</span>
+                        </div>
+                        <div style="font-size:11px;color:#6b7280;margin-top:6px;">
+                            ${sig.confirmed ? 'CONFIRMED' : sig.expired ? 'EXPIRED' : 'Awaiting confirmation...'}
+                        </div>
+                    </div>`;
+            }
+            container.innerHTML = html;
+        }
+
+        function renderPositions(positions) {
+            const container = document.getElementById('positions-table');
+            if (!positions || positions.length === 0) {
+                container.innerHTML = '<div class="empty-state">No open positions</div>';
+                return;
+            }
+            let html = `<table>
+                <tr>
+                    <th>Symbol</th><th>Direction</th><th>Entry</th><th>Stop</th>
+                    <th>Target (SMA)</th><th>Tranches</th><th>PnL</th><th>Hold (h)</th>
+                </tr>`;
+            for (const p of positions) {
+                const pnlClass = (p.unrealized_pnl || 0) >= 0 ? 'green' : 'red';
+                // Tranche progress bar
+                let t1 = p.t1_filled ? 40 : 0;
+                let t2 = p.t2_filled ? 30 : 0;
+                let t3 = p.t3_filled ? 30 : 0;
+                html += `<tr>
+                    <td>${p.symbol}</td>
+                    <td class="${p.direction === 'LONG' ? 'dir-long' : 'dir-short'}">${p.direction}</td>
+                    <td>${(p.entry_price || 0).toFixed(2)}</td>
+                    <td>${(p.stop_price || 0).toFixed(2)} ${p.breakeven ? '(BE)' : ''}</td>
+                    <td>${(p.target_sma || 0).toFixed(2)}</td>
+                    <td style="min-width:100px">
+                        <div class="tranche-bar">
+                            <div class="tranche-fill tranche-1" style="width:${t1}%"></div>
+                            <div class="tranche-fill tranche-2" style="width:${t2}%"></div>
+                            <div class="tranche-fill tranche-3" style="width:${t3}%"></div>
+                        </div>
+                    </td>
+                    <td class="${pnlClass}">${(p.unrealized_pnl || 0).toFixed(4)}</td>
+                    <td>${(p.holding_hours || 0).toFixed(1)}</td>
+                </tr>`;
+            }
+            html += '</table>';
+            container.innerHTML = html;
+        }
+
+        function renderRisk(risk) {
+            setText('drawdown-pct', (risk.drawdown_pct || 0).toFixed(2) + '%');
+            colorPnl('drawdown-pct', -(risk.drawdown_pct || 0));
+            setText('consec-losses', risk.consecutive_losses || 0);
+            const exp = risk.exposure || {};
+            setText('exposure-pct', (exp.total_exposure_pct || 0).toFixed(1) + '%');
+            const bl = risk.blacklist || {};
+            setText('blacklist-count', Object.keys(bl).length);
+            if (risk.is_halted) {
+                document.getElementById('consec-losses').classList.add('red');
+            }
+        }
+
+        function renderAlerts(alerts) {
+            const container = document.getElementById('alerts-container');
+            if (!alerts || alerts.length === 0) {
+                container.innerHTML = '<div class="empty-state">No alerts</div>';
+                return;
+            }
+            let html = '';
+            for (const a of alerts.slice(-10).reverse()) {
+                const level = a.level || 'info';
+                html += `<div class="alert alert-${level}">
+                    <div class="alert-dot"></div>
+                    <span>${a.message}</span>
+                </div>`;
+            }
+            container.innerHTML = html;
+        }
+
+        // Helpers
+        function setText(id, val) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val;
+        }
+        function formatPnl(v) {
+            if (v === undefined || v === null) return '--';
+            return (v >= 0 ? '+' : '') + v.toFixed(4);
+        }
+        function colorPnl(id, v) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('green', 'red');
+            if (v > 0) el.classList.add('green');
+            else if (v < 0) el.classList.add('red');
+        }
+
+        // Init
+        connectWebSocket();
+
+        // Ping keepalive
+        setInterval(function() {
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send('ping');
+        }, 25000);
+    </script>
+</body>
+</html>

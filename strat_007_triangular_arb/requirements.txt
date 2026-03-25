@@ -1,0 +1,30 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# STRAT-007: Cross-Exchange Triangular Arbitrage — Python Dependencies
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Async HTTP client
+httpx>=0.25.0,<1.0
+
+# WebSocket client
+websockets>=12.0,<14.0
+
+# Web framework for dashboard
+fastapi>=0.104.0,<1.0
+uvicorn[standard]>=0.24.0,<1.0
+jinja2>=3.1.0,<4.0
+
+# Configuration
+pyyaml>=6.0,<7.0
+
+# Database
+sqlalchemy>=2.0.0,<3.0
+aiosqlite>=0.19.0,<1.0
+
+# Numerical
+numpy>=1.24.0,<2.0
+
+# System monitoring
+psutil>=5.9.0,<6.0
+
+# Environment variables
+python-dotenv>=1.0.0,<2.0

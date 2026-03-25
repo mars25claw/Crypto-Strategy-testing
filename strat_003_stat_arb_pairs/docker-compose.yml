@@ -1,0 +1,33 @@
+version: "3.8"
+
+services:
+  strat-003-stat-arb:
+    build:
+      context: ..
+      dockerfile: strat_003_stat_arb_pairs/Dockerfile
+    container_name: strat-003-stat-arb-pairs
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    volumes:
+      - ./data:/app/strat_003_stat_arb_pairs/data
+      - ./config.yaml:/app/strat_003_stat_arb_pairs/config.yaml:ro
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - CONFIG_PATH=config.yaml
+    mem_limit: 2g
+    cpus: 2.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s

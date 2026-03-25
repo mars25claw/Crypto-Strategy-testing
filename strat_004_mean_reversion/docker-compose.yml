@@ -1,0 +1,60 @@
+# ==============================================================================
+# STRAT-004 Mean Reversion — Docker Compose
+# ==============================================================================
+version: "3.8"
+
+services:
+  strat-004-mean-reversion:
+    build:
+      context: ..
+      dockerfile: strat_004_mean_reversion/Dockerfile
+    container_name: strat-004-mean-reversion
+    restart: unless-stopped
+
+    ports:
+      - "8084:8084"
+
+    env_file:
+      - .env
+
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - CONFIG_PATH=/app/config.yaml
+      - SHARED_STATE_DIR=/app/data/shared
+
+    volumes:
+      # Persist data (state, logs, database)
+      - ./data:/app/data
+      # Shared state directory for cross-strategy communication
+      - shared-state:/app/data/shared
+      # Config hot-reload
+      - ./config.yaml:/app/config.yaml:ro
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8084/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
+          memory: 256M
+          cpus: "0.25"
+
+volumes:
+  shared-state:
+    # External volume shared across all strategy containers
+    external: true
+    name: trading-shared-state

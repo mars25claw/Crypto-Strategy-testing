@@ -1,0 +1,34 @@
+version: "3.8"
+
+services:
+  strat-010-ml-onchain:
+    build:
+      context: ..
+      dockerfile: strat_010_ml_onchain/Dockerfile
+    container_name: strat-010-ml-onchain
+    restart: unless-stopped
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./data:/app/strat_010_ml_onchain/data
+      - ./models:/app/strat_010_ml_onchain/models
+      - ./config.yaml:/app/strat_010_ml_onchain/config.yaml:ro
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - BOT_MODE=paper
+    mem_limit: 1536m
+    memswap_limit: 2g
+    cpus: 2.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8089/health'); r.raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s

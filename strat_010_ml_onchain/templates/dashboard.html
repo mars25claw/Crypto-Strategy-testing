@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ strategy_name }} Dashboard</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --accent-green: #3fb950;
+            --accent-red: #f85149;
+            --accent-yellow: #d29922;
+            --accent-blue: #58a6ff;
+            --accent-purple: #bc8cff;
+            --border: #30363d;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 18px; font-weight: 600; }
+        .header .meta { font-size: 12px; color: var(--text-secondary); }
+        .mode-badge {
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .mode-paper { background: var(--accent-yellow); color: #000; }
+        .mode-live { background: var(--accent-red); color: #fff; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 16px;
+            padding: 16px 24px;
+        }
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .card h2 {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+        }
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+        }
+        .metric-label { color: var(--text-secondary); }
+        .metric-value { font-weight: 500; font-family: 'SF Mono', monospace; }
+        .metric-value.positive { color: var(--accent-green); }
+        .metric-value.negative { color: var(--accent-red); }
+        .metric-value.warning { color: var(--accent-yellow); }
+        .metric-value.info { color: var(--accent-blue); }
+        .gauge {
+            width: 100%;
+            height: 24px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 8px 0;
+        }
+        .gauge-fill {
+            height: 100%;
+            transition: width 0.5s ease;
+            border-radius: 4px;
+        }
+        .gauge-green { background: var(--accent-green); }
+        .gauge-red { background: var(--accent-red); }
+        .gauge-yellow { background: var(--accent-yellow); }
+        .gauge-blue { background: var(--accent-blue); }
+        .bar-chart { display: flex; flex-direction: column; gap: 4px; }
+        .bar-row { display: flex; align-items: center; gap: 8px; }
+        .bar-label { width: 80px; font-size: 11px; color: var(--text-secondary); text-align: right; overflow: hidden; }
+        .bar-container { flex: 1; height: 16px; background: var(--bg-tertiary); border-radius: 2px; }
+        .bar-fill { height: 100%; background: var(--accent-blue); border-radius: 2px; transition: width 0.3s; }
+        .bar-value { width: 40px; font-size: 11px; font-family: monospace; }
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+        .dot-green { background: var(--accent-green); }
+        .dot-red { background: var(--accent-red); }
+        .dot-yellow { background: var(--accent-yellow); }
+        .position-card {
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+        .position-header {
+            display: flex;
+            justify-content: space-between;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .long { color: var(--accent-green); }
+        .short { color: var(--accent-red); }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-secondary); font-weight: 500; }
+        .kill-btn {
+            background: var(--accent-red);
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .kill-btn:hover { opacity: 0.8; }
+        .prediction-bar {
+            display: flex;
+            height: 20px;
+            margin: 4px 0;
+            border-radius: 3px;
+            overflow: hidden;
+            background: var(--bg-tertiary);
+        }
+        .pred-segment {
+            transition: width 0.3s;
+            min-width: 2px;
+        }
+        #ws-status { font-size: 11px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>{{ strategy_name }}</h1>
+            <div class="meta">{{ strategy_id }} | Uptime: <span id="uptime">{{ uptime }}</span> | Memory: <span id="memory">{{ memory_mb }}</span> MB</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+            <span id="ws-status"><span class="status-dot dot-yellow"></span>Connecting...</span>
+            <span class="mode-badge mode-{{ mode }}">{{ mode }}</span>
+            <button class="kill-btn" onclick="killSwitch()">KILL SWITCH</button>
+        </div>
+    </div>
+
+    <div class="grid">
+        <!-- Model Status -->
+        <div class="card">
+            <h2>Model Status</h2>
+            <div id="model-status">
+                <div class="metric-row">
+                    <span class="metric-label">XGBoost</span>
+                    <span class="metric-value" id="xgb-status">Loading...</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">LSTM</span>
+                    <span class="metric-value" id="lstm-status">Loading...</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Freshness</span>
+                    <span class="metric-value" id="freshness">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Ensemble Agreement</span>
+                    <span class="metric-value" id="agreement">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Inference Count</span>
+                    <span class="metric-value" id="inference-count">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Model Accuracy Gauge -->
+        <div class="card">
+            <h2>Model Accuracy</h2>
+            <div id="accuracy-gauge">
+                <div class="metric-row">
+                    <span class="metric-label">Rolling Accuracy</span>
+                    <span class="metric-value info" id="rolling-accuracy">--</span>
+                </div>
+                <div class="gauge"><div class="gauge-fill gauge-blue" id="accuracy-bar" style="width:0%"></div></div>
+                <div class="metric-row">
+                    <span class="metric-label">Rolling Sharpe</span>
+                    <span class="metric-value" id="rolling-sharpe">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Consecutive Losses</span>
+                    <span class="metric-value" id="consec-losses">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Prediction Distribution -->
+        <div class="card">
+            <h2>Prediction Distribution</h2>
+            <div id="pred-dist" class="bar-chart"></div>
+        </div>
+
+        <!-- Feature Importance -->
+        <div class="card">
+            <h2>Feature Importance (Top 10)</h2>
+            <div id="feature-importance" class="bar-chart"></div>
+        </div>
+
+        <!-- Open Positions -->
+        <div class="card">
+            <h2>Open Positions</h2>
+            <div id="positions">
+                <p style="color:var(--text-secondary)">No open positions</p>
+            </div>
+        </div>
+
+        <!-- Performance Metrics -->
+        <div class="card">
+            <h2>Performance</h2>
+            <div id="performance">
+                <div class="metric-row">
+                    <span class="metric-label">Total PnL</span>
+                    <span class="metric-value" id="total-pnl">$0.00</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Win Rate</span>
+                    <span class="metric-value" id="win-rate">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Trade Count</span>
+                    <span class="metric-value" id="trade-count">0</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Sharpe (All Time)</span>
+                    <span class="metric-value" id="sharpe">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Max Drawdown</span>
+                    <span class="metric-value negative" id="max-dd">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Profit Factor</span>
+                    <span class="metric-value" id="profit-factor">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Risk Status -->
+        <div class="card">
+            <h2>Risk Management</h2>
+            <div id="risk-status">
+                <div class="metric-row">
+                    <span class="metric-label">Strategy Status</span>
+                    <span class="metric-value" id="risk-halted">Active</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Model Freshness</span>
+                    <span class="metric-value" id="risk-freshness">1.00</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Inference Failures</span>
+                    <span class="metric-value" id="inf-failures">0</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">Stale Sources</span>
+                    <span class="metric-value" id="stale-sources">None</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Data Source Health -->
+        <div class="card">
+            <h2>Data Source Health</h2>
+            <div id="data-sources">
+                <div class="metric-row">
+                    <span class="metric-label"><span class="status-dot dot-yellow" id="dot-glassnode"></span>Glassnode</span>
+                    <span class="metric-value" id="ds-glassnode">Unknown</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label"><span class="status-dot dot-yellow" id="dot-sentiment"></span>Sentiment</span>
+                    <span class="metric-value" id="ds-sentiment">Unknown</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label"><span class="status-dot dot-yellow" id="dot-feargreed"></span>Fear & Greed</span>
+                    <span class="metric-value" id="ds-feargreed">Unknown</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label"><span class="status-dot dot-green" id="dot-binance"></span>Binance</span>
+                    <span class="metric-value" id="ds-binance">Connected</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Confidence vs Accuracy -->
+        <div class="card">
+            <h2>Confidence vs Accuracy</h2>
+            <div id="conf-accuracy">
+                <div class="metric-row">
+                    <span class="metric-label">HIGH Confidence Accuracy</span>
+                    <span class="metric-value" id="high-acc">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">HIGH Confidence Trades</span>
+                    <span class="metric-value" id="high-count">0</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">MODERATE Conf Accuracy</span>
+                    <span class="metric-value" id="mod-acc">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">MODERATE Conf Trades</span>
+                    <span class="metric-value" id="mod-count">0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const WS_URL = "{{ ws_url }}";
+    let ws = null;
+    let reconnectTimer = null;
+
+    function connectWS() {
+        ws = new WebSocket(WS_URL);
+        ws.onopen = () => {
+            document.getElementById('ws-status').innerHTML =
+                '<span class="status-dot dot-green"></span>Connected';
+            if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+        };
+        ws.onmessage = (event) => {
+            try { handleUpdate(JSON.parse(event.data)); } catch(e) {}
+        };
+        ws.onclose = () => {
+            document.getElementById('ws-status').innerHTML =
+                '<span class="status-dot dot-red"></span>Disconnected';
+            if (!reconnectTimer) { reconnectTimer = setInterval(connectWS, 5000); }
+        };
+        ws.onerror = () => ws.close();
+    }
+
+    function handleUpdate(data) {
+        if (data.type === 'pong') return;
+
+        // Uptime & memory
+        if (data.uptime) document.getElementById('uptime').textContent = data.uptime;
+        if (data.memory_mb) document.getElementById('memory').textContent = data.memory_mb;
+
+        // Positions
+        if (data.positions) renderPositions(data.positions);
+
+        // Metrics
+        if (data.metrics) renderMetrics(data.metrics);
+
+        // Model status
+        if (data.model) renderModel(data.model);
+
+        // Risk
+        if (data.risk) renderRisk(data.risk);
+    }
+
+    function renderPositions(positions) {
+        const el = document.getElementById('positions');
+        if (!positions || positions.length === 0) {
+            el.innerHTML = '<p style="color:var(--text-secondary)">No open positions</p>';
+            return;
+        }
+        el.innerHTML = positions.map(p => `
+            <div class="position-card">
+                <div class="position-header">
+                    <span>${p.symbol} <span class="${p.direction.toLowerCase()}">${p.direction}</span></span>
+                    <span>P=${(p.entry_p_final || 0).toFixed(4)}</span>
+                </div>
+                <div class="metric-row"><span class="metric-label">Entry</span><span class="metric-value">${p.entry_price}</span></div>
+                <div class="metric-row"><span class="metric-label">Size</span><span class="metric-value">$${(p.size_usdt || 0).toFixed(2)}</span></div>
+                <div class="metric-row"><span class="metric-label">Age</span><span class="metric-value">${(p.age_hours || 0).toFixed(1)}h</span></div>
+                <div class="metric-row"><span class="metric-label">Stop</span><span class="metric-value">${p.hard_stop_price}</span></div>
+                <div class="metric-row"><span class="metric-label">TP1/TP2</span><span class="metric-value">${p.tp1_filled ? 'Y' : 'N'}/${p.tp2_filled ? 'Y' : 'N'}</span></div>
+            </div>
+        `).join('');
+    }
+
+    function renderMetrics(m) {
+        const pnl = m.total_pnl || 0;
+        const pnlEl = document.getElementById('total-pnl');
+        pnlEl.textContent = '$' + pnl.toFixed(2);
+        pnlEl.className = 'metric-value ' + (pnl >= 0 ? 'positive' : 'negative');
+
+        document.getElementById('win-rate').textContent = ((m.win_rate || 0) * 100).toFixed(1) + '%';
+        document.getElementById('trade-count').textContent = m.trade_count || 0;
+
+        const sr = m.sharpe_ratio;
+        document.getElementById('sharpe').textContent = sr ? (sr.all_time || 0).toFixed(4) : '--';
+
+        const dd = m.max_drawdown;
+        document.getElementById('max-dd').textContent = dd ? (dd.pct || 0).toFixed(2) + '%' : '--';
+        document.getElementById('profit-factor').textContent = m.profit_factor != null ? m.profit_factor.toFixed(2) : '--';
+    }
+
+    function renderModel(model) {
+        document.getElementById('xgb-status').innerHTML =
+            model.xgb_loaded ?
+                '<span class="status-dot dot-green"></span>Loaded (v' + (model.xgb_meta?.version || '?') + ')' :
+                '<span class="status-dot dot-red"></span>Not loaded';
+        document.getElementById('lstm-status').innerHTML =
+            model.lstm_loaded ?
+                '<span class="status-dot dot-green"></span>Loaded (v' + (model.lstm_meta?.version || '?') + ')' :
+                '<span class="status-dot dot-red"></span>Not loaded';
+
+        const fm = model.freshness_multiplier || 0;
+        const fEl = document.getElementById('freshness');
+        fEl.textContent = fm.toFixed(2);
+        fEl.className = 'metric-value ' + (fm >= 1 ? 'positive' : fm > 0 ? 'warning' : 'negative');
+
+        document.getElementById('agreement').textContent =
+            ((model.ensemble_agreement_rate || 0) * 100).toFixed(1) + '%';
+        document.getElementById('inference-count').textContent = model.inference_count || 0;
+    }
+
+    function renderRisk(risk) {
+        const haltEl = document.getElementById('risk-halted');
+        if (risk.halted) {
+            haltEl.textContent = 'HALTED: ' + (risk.halt_reason || '');
+            haltEl.className = 'metric-value negative';
+        } else {
+            haltEl.textContent = 'Active';
+            haltEl.className = 'metric-value positive';
+        }
+
+        const acc = risk.rolling_accuracy || 0;
+        document.getElementById('rolling-accuracy').textContent = (acc * 100).toFixed(1) + '%';
+        document.getElementById('accuracy-bar').style.width = (acc * 100) + '%';
+
+        document.getElementById('rolling-sharpe').textContent = (risk.rolling_sharpe || 0).toFixed(2);
+        document.getElementById('consec-losses').textContent = risk.consecutive_losses || 0;
+        document.getElementById('risk-freshness').textContent = (risk.model_freshness_mult || 0).toFixed(2);
+        document.getElementById('inf-failures').textContent = risk.inference_failures || 0;
+
+        const stale = risk.stale_data_sources || [];
+        document.getElementById('stale-sources').textContent = stale.length > 0 ? stale.join(', ') : 'None';
+    }
+
+    function killSwitch() {
+        if (!confirm('KILL SWITCH: Close all positions and cancel all orders?')) return;
+        fetch('/kill', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({reason: 'Dashboard kill switch'})
+        }).then(r => r.json()).then(d => alert(JSON.stringify(d, null, 2)));
+    }
+
+    // Fetch initial ML data
+    async function fetchMLData() {
+        try {
+            const [dist, feat, conf] = await Promise.all([
+                fetch('/api/predictions/distribution').then(r => r.json()),
+                fetch('/api/features/importance').then(r => r.json()),
+                fetch('/api/confidence').then(r => r.json()),
+            ]);
+
+            // Prediction distribution
+            if (dist && typeof dist === 'object') {
+                const el = document.getElementById('pred-dist');
+                const maxVal = Math.max(...Object.values(dist), 1);
+                el.innerHTML = Object.entries(dist).map(([k, v]) => `
+                    <div class="bar-row">
+                        <span class="bar-label">${k}</span>
+                        <div class="bar-container"><div class="bar-fill" style="width:${(v/maxVal*100)}%"></div></div>
+                        <span class="bar-value">${v}</span>
+                    </div>
+                `).join('');
+            }
+
+            // Feature importance
+            if (feat && Array.isArray(feat)) {
+                const el = document.getElementById('feature-importance');
+                const maxImp = feat.length > 0 ? feat[0][1] : 1;
+                el.innerHTML = feat.map(([name, score]) => `
+                    <div class="bar-row">
+                        <span class="bar-label">${name}</span>
+                        <div class="bar-container"><div class="bar-fill gauge-purple" style="width:${(score/maxImp*100)}%;background:var(--accent-purple)"></div></div>
+                        <span class="bar-value">${score.toFixed(1)}</span>
+                    </div>
+                `).join('');
+            }
+
+            // Confidence vs accuracy
+            if (conf) {
+                const high = conf.HIGH || {};
+                const mod = conf.MODERATE || {};
+                document.getElementById('high-acc').textContent = ((high.accuracy || 0) * 100).toFixed(1) + '%';
+                document.getElementById('high-count').textContent = high.count || 0;
+                document.getElementById('mod-acc').textContent = ((mod.accuracy || 0) * 100).toFixed(1) + '%';
+                document.getElementById('mod-count').textContent = mod.count || 0;
+            }
+        } catch(e) {}
+    }
+
+    connectWS();
+    fetchMLData();
+    setInterval(fetchMLData, 60000);
+    </script>
+</body>
+</html>

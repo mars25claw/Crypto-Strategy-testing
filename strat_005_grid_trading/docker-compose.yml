@@ -1,0 +1,42 @@
+version: "3.8"
+
+services:
+  strat-005-grid:
+    build:
+      context: ..
+      dockerfile: strat_005_grid_trading/Dockerfile
+    container_name: strat-005-grid-trading
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    volumes:
+      - ./data:/app/strat_005_grid_trading/data
+      - ./config.yaml:/app/strat_005_grid_trading/config.yaml:ro
+    environment:
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+      - BINANCE_API_SECRET=${BINANCE_API_SECRET}
+      - BOT_MODE=${BOT_MODE:-paper}
+      - CONFIG_PATH=config.yaml
+      - PYTHONPATH=/app
+      - TZ=UTC
+    env_file:
+      - .env
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1024M
+          cpus: "1.0"
+        reservations:
+          memory: 256M
+          cpus: "0.25"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8085/health'); r.raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

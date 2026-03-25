@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Top metric cards -->
+<div class="card-grid">
+    <div class="card">
+        <div class="card-label">Total PnL</div>
+        <div class="card-value {{ 'positive' if metrics.get('total_pnl', 0) >= 0 else 'negative' }}" id="card-pnl">
+            {{ "+" if metrics.get('total_pnl', 0) >= 0 else "" }}{{ "%.2f"|format(metrics.get('total_pnl', 0)) }}
+        </div>
+        <div class="card-sub">USDT</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Win Rate</div>
+        <div class="card-value" id="card-winrate">{{ "%.1f"|format(metrics.get('win_rate', 0)) }}%</div>
+        <div class="card-sub">{{ metrics.get('total_trades', 0) }} trades</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Sharpe Ratio</div>
+        <div class="card-value {{ 'positive' if metrics.get('sharpe_ratio', 0) >= 0 else 'negative' }}" id="card-sharpe">
+            {{ "%.2f"|format(metrics.get('sharpe_ratio', 0)) }}
+        </div>
+        <div class="card-sub">annualized</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Max Drawdown</div>
+        <div class="card-value negative" id="card-drawdown">{{ "%.2f"|format(metrics.get('max_drawdown', 0)) }}%</div>
+        <div class="card-sub">from peak</div>
+    </div>
+    <div class="card">
+        <div class="card-label">Active Positions</div>
+        <div class="card-value" id="card-positions">{{ positions|length }}</div>
+        <div class="card-sub">open now</div>
+    </div>
+</div>
+
+<!-- Equity curve -->
+<div class="section">
+    <div class="section-header">
+        <span class="section-title">Equity Curve</span>
+        <span style="font-size:11px;color:var(--text-muted)">{{ equity|length }} data points</span>
+    </div>
+    <div class="section-body">
+        <div class="equity-chart" id="equity-chart">
+            {% if equity|length > 1 %}
+            {% set values = equity | map(attribute='equity') | list if equity[0] is mapping else equity %}
+            {% set eq_values = [] %}
+            {% for pt in equity %}
+                {% if pt is mapping %}
+                    {% set _ = eq_values.append(pt.get('equity', pt.get('value', pt.get('balance', 0)))) %}
+                {% else %}
+                    {% set _ = eq_values.append(pt) %}
+                {% endif %}
+            {% endfor %}
+            <svg viewBox="0 0 800 200" preserveAspectRatio="none">
+                <defs>
+                    <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#58a6ff" stop-opacity="0.3"/>
+                        <stop offset="100%" stop-color="#58a6ff" stop-opacity="0.02"/>
+                    </linearGradient>
+                </defs>
+                <!-- Grid lines -->
+                <line x1="0" y1="50" x2="800" y2="50" class="equity-grid"/>
+                <line x1="0" y1="100" x2="800" y2="100" class="equity-grid"/>
+                <line x1="0" y1="150" x2="800" y2="150" class="equity-grid"/>
+            </svg>
+            <div style="text-align:center;color:var(--text-muted);font-size:12px;margin-top:8px;">
+                Equity chart renders via WebSocket updates
+            </div>
+            {% else %}
+            <div style="text-align:center;padding:40px;color:var(--text-muted);">
+                No equity data available yet. Chart will populate as trades execute.
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Open positions -->
+<div class="section">
+    <div class="section-header">
+        <span class="section-title">Open Positions</span>
+        <span style="font-size:11px;color:var(--text-muted)">{{ positions|length }} active</span>
+    </div>
+    <div class="section-body" style="padding:0;overflow-x:auto;">
+        <table class="data-table" id="positions-table">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Direction</th>
+                    <th>Size</th>
+                    <th>Entry</th>
+                    <th>Current</th>
+                    <th>PnL</th>
+                    <th>PnL %</th>
+                    <th>Duration</th>
+                </tr>
+            </thead>
+            <tbody id="positions-tbody">
+                {% if positions %}
+                {% for p in positions %}
+                <tr>
+                    <td style="color:var(--text-bright);font-weight:600;">{{ p.get('symbol', p.get('pair', '—')) }}</td>
+                    <td>
+                        {% set dir = p.get('direction', p.get('side', 'long')) | lower %}
+                        <span class="badge {{ 'badge-long' if dir == 'long' else 'badge-short' }}">{{ dir | upper }}</span>
+                    </td>
+                    <td>{{ p.get('size', p.get('quantity', p.get('amount', '—'))) }}</td>
+                    <td>{{ "%.4f"|format(p.get('entry_price', p.get('entry', 0))) }}</td>
+                    <td>{{ "%.4f"|format(p.get('current_price', p.get('mark_price', 0))) }}</td>
+                    <td class="{{ 'pnl-positive' if p.get('pnl', p.get('unrealized_pnl', 0)) >= 0 else 'pnl-negative' }}">
+                        {{ "%.2f"|format(p.get('pnl', p.get('unrealized_pnl', 0))) }}
+                    </td>
+                    <td class="{{ 'pnl-positive' if p.get('pnl_pct', 0) >= 0 else 'pnl-negative' }}">
+                        {{ "%.2f"|format(p.get('pnl_pct', 0)) }}%
+                    </td>
+                    <td style="color:var(--text-muted);">{{ p.get('duration', p.get('hold_time', '—')) }}</td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No open positions</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Recent trades -->
+<div class="section">
+    <div class="section-header">
+        <span class="section-title">Recent Trades</span>
+        <span style="font-size:11px;color:var(--text-muted)">last {{ trades|length }}</span>
+    </div>
+    <div class="section-body" style="padding:0;overflow-x:auto;">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Direction</th>
+                    <th>Entry</th>
+                    <th>Exit</th>
+                    <th>PnL</th>
+                    <th>R-Multiple</th>
+                    <th>Duration</th>
+                    <th>Reason</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if trades %}
+                {% for t in trades %}
+                <tr>
+                    <td style="color:var(--text-bright);font-weight:600;">{{ t.get('symbol', t.get('pair', '—')) }}</td>
+                    <td>
+                        {% set dir = t.get('direction', t.get('side', 'long')) | lower %}
+                        <span class="badge {{ 'badge-long' if dir == 'long' else 'badge-short' }}">{{ dir | upper }}</span>
+                    </td>
+                    <td>{{ "%.4f"|format(t.get('entry_price', t.get('entry', 0))) }}</td>
+                    <td>{{ "%.4f"|format(t.get('exit_price', t.get('exit', 0))) }}</td>
+                    <td class="{{ 'pnl-positive' if t.get('pnl', 0) >= 0 else 'pnl-negative' }}">
+                        {{ "+" if t.get('pnl', 0) >= 0 else "" }}{{ "%.2f"|format(t.get('pnl', 0)) }}
+                    </td>
+                    <td class="{{ 'pnl-positive' if t.get('r_multiple', 0) >= 0 else 'pnl-negative' }}">
+                        {{ "%.1f"|format(t.get('r_multiple', 0)) }}R
+                    </td>
+                    <td style="color:var(--text-muted);">{{ t.get('duration', t.get('hold_time', '—')) }}</td>
+                    <td style="color:var(--text-muted);font-size:11px;">{{ t.get('exit_reason', t.get('reason', '—')) }}</td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No trades recorded yet</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Alerts -->
+<div class="section">
+    <div class="section-header">
+        <span class="section-title">Alerts</span>
+        <span style="font-size:11px;color:var(--text-muted)" id="alerts-count">{{ alerts|length }}</span>
+    </div>
+    <div class="section-body" style="padding:0;" id="alerts-container">
+        {% if alerts %}
+        {% for a in alerts | reverse %}
+        <div class="alert-item">
+            <span class="alert-time">{{ a.get('time', a.get('timestamp', ''))[-8:] if a.get('time', a.get('timestamp', '')) else '—' }}</span>
+            <span class="alert-level {{ a.get('level', 'info') | lower }}">{{ a.get('level', 'info') | upper }}</span>
+            <span class="alert-msg">{{ a.get('message', a.get('msg', '—')) }}</span>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="alert-item" style="justify-content:center;color:var(--text-muted);">No alerts</div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Kill switch -->
+<div class="section" id="kill-section">
+    <div class="section-header">
+        <span class="section-title" style="color:var(--red);">Emergency Kill Switch</span>
+    </div>
+    <div class="section-body" style="text-align:center;padding:24px;">
+        <p style="color:var(--text-muted);margin-bottom:16px;font-size:13px;">
+            Cancel all open orders and close all positions at market price immediately.
+            This action cannot be undone.
+        </p>
+        <button class="kill-btn" onclick="triggerKill()">KILL SWITCH</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// --- Live positions table update ---
+function updatePositionsTable(positions) {
+    var tbody = document.getElementById("positions-tbody");
+    if (!tbody) return;
+    if (!positions || positions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-muted);">No open positions</td></tr>';
+        return;
+    }
+    var html = "";
+    for (var i = 0; i < positions.length; i++) {
+        var p = positions[i];
+        var sym = p.symbol || p.pair || "—";
+        var dir = (p.direction || p.side || "long").toLowerCase();
+        var size = p.size || p.quantity || p.amount || "—";
+        var entry = parseFloat(p.entry_price || p.entry || 0);
+        var current = parseFloat(p.current_price || p.mark_price || 0);
+        var pnl = parseFloat(p.pnl || p.unrealized_pnl || 0);
+        var pnlPct = parseFloat(p.pnl_pct || 0);
+        var dur = p.duration || p.hold_time || "—";
+        var dirClass = dir === "long" ? "badge-long" : "badge-short";
+        var pnlClass = pnl >= 0 ? "pnl-positive" : "pnl-negative";
+        var pctClass = pnlPct >= 0 ? "pnl-positive" : "pnl-negative";
+
+        html += '<tr>';
+        html += '<td style="color:var(--text-bright);font-weight:600;">' + sym + '</td>';
+        html += '<td><span class="badge ' + dirClass + '">' + dir.toUpperCase() + '</span></td>';
+        html += '<td>' + size + '</td>';
+        html += '<td>' + entry.toFixed(4) + '</td>';
+        html += '<td>' + current.toFixed(4) + '</td>';
+        html += '<td class="' + pnlClass + '">' + pnl.toFixed(2) + '</td>';
+        html += '<td class="' + pctClass + '">' + pnlPct.toFixed(2) + '%</td>';
+        html += '<td style="color:var(--text-muted);">' + dur + '</td>';
+        html += '</tr>';
+    }
+    tbody.innerHTML = html;
+}
+
+// --- Live alerts update ---
+function updateAlerts(alerts) {
+    var container = document.getElementById("alerts-container");
+    var countEl = document.getElementById("alerts-count");
+    if (!container) return;
+    if (countEl) countEl.textContent = alerts.length;
+    if (!alerts || alerts.length === 0) {
+        container.innerHTML = '<div class="alert-item" style="justify-content:center;color:var(--text-muted);">No alerts</div>';
+        return;
+    }
+    var html = "";
+    // Show most recent first
+    for (var i = alerts.length - 1; i >= 0; i--) {
+        var a = alerts[i];
+        var ts = a.time || a.timestamp || "";
+        var timeStr = ts.length >= 8 ? ts.slice(-8) : ts || "—";
+        var level = (a.level || "info").toLowerCase();
+        var msg = a.message || a.msg || "—";
+        html += '<div class="alert-item">';
+        html += '<span class="alert-time">' + timeStr + '</span>';
+        html += '<span class="alert-level ' + level + '">' + level.toUpperCase() + '</span>';
+        html += '<span class="alert-msg">' + msg + '</span>';
+        html += '</div>';
+    }
+    container.innerHTML = html;
+}
+
+// --- Simple SVG equity chart rendering ---
+function renderEquityChart(equity) {
+    var chartEl = document.getElementById("equity-chart");
+    if (!chartEl || !equity || equity.length < 2) return;
+
+    var values = [];
+    for (var i = 0; i < equity.length; i++) {
+        var pt = equity[i];
+        var v = (typeof pt === "object") ? (pt.equity || pt.value || pt.balance || 0) : pt;
+        values.push(parseFloat(v));
+    }
+    if (values.length < 2) return;
+
+    var W = 800, H = 200, PAD = 10;
+    var minV = Math.min.apply(null, values);
+    var maxV = Math.max.apply(null, values);
+    var range = maxV - minV || 1;
+
+    function x(i) { return PAD + (i / (values.length - 1)) * (W - 2 * PAD); }
+    function y(v) { return H - PAD - ((v - minV) / range) * (H - 2 * PAD); }
+
+    // Build line path
+    var linePts = [];
+    var areaPts = [];
+    for (var i = 0; i < values.length; i++) {
+        linePts.push(x(i).toFixed(1) + "," + y(values[i]).toFixed(1));
+        areaPts.push(x(i).toFixed(1) + "," + y(values[i]).toFixed(1));
+    }
+    // Close area
+    areaPts.push(x(values.length - 1).toFixed(1) + "," + (H - PAD));
+    areaPts.push(x(0).toFixed(1) + "," + (H - PAD));
+
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">';
+    svg += '<defs><linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">';
+    svg += '<stop offset="0%" stop-color="#58a6ff" stop-opacity="0.3"/>';
+    svg += '<stop offset="100%" stop-color="#58a6ff" stop-opacity="0.02"/>';
+    svg += '</linearGradient></defs>';
+
+    // Grid
+    for (var g = 0; g < 4; g++) {
+        var gy = PAD + (g / 3) * (H - 2 * PAD);
+        svg += '<line x1="' + PAD + '" y1="' + gy.toFixed(1) + '" x2="' + (W - PAD) + '" y2="' + gy.toFixed(1) + '" class="equity-grid"/>';
+    }
+
+    // Area + line
+    svg += '<polygon points="' + areaPts.join(" ") + '" class="equity-area"/>';
+    svg += '<polyline points="' + linePts.join(" ") + '" class="equity-line"/>';
+
+    // Min / max labels
+    svg += '<text x="' + (W - PAD - 2) + '" y="' + (PAD + 12) + '" fill="#8b949e" font-size="10" text-anchor="end" font-family="monospace">' + maxV.toFixed(2) + '</text>';
+    svg += '<text x="' + (W - PAD - 2) + '" y="' + (H - PAD - 4) + '" fill="#8b949e" font-size="10" text-anchor="end" font-family="monospace">' + minV.toFixed(2) + '</text>';
+
+    svg += '</svg>';
+    chartEl.innerHTML = svg;
+}
+
+// Render chart on load with server-side data
+(function() {
+    try {
+        var equity = {{ equity | tojson }};
+        renderEquityChart(equity);
+    } catch(e) {}
+})();
+</script>
+{% endblock %}

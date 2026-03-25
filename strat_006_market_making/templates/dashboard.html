@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STRAT-006 Market Making Dashboard</title>
+    <style>
+        :root {
+            --bg: #0d1117; --surface: #161b22; --border: #30363d;
+            --text: #c9d1d9; --text-dim: #8b949e; --accent: #58a6ff;
+            --green: #3fb950; --red: #f85149; --orange: #d29922; --purple: #bc8cff;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--bg); color: var(--text); font-size: 13px; }
+        .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 16px; color: var(--accent); }
+        .header .mode { padding: 4px 12px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+        .mode-paper { background: #d2992233; color: var(--orange); }
+        .mode-live { background: #f8514933; color: var(--red); }
+        .status-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 8px 20px; display: flex; gap: 24px; font-size: 12px; color: var(--text-dim); }
+        .status-bar .stat { display: flex; gap: 6px; }
+        .stat-value { color: var(--text); font-weight: 600; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; padding: 16px; }
+        .grid-wide { grid-column: span 3; }
+        .grid-half { grid-column: span 2; }
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+        .card-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-dim); margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        th { text-align: left; padding: 6px 8px; color: var(--text-dim); font-weight: 500; border-bottom: 1px solid var(--border); }
+        td { padding: 6px 8px; border-bottom: 1px solid #21262d; }
+        .positive { color: var(--green); }
+        .negative { color: var(--red); }
+        .warning { color: var(--orange); }
+        .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+        .metric-box { text-align: center; padding: 10px; background: #0d111744; border-radius: 6px; }
+        .metric-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+        .metric-value { font-size: 20px; font-weight: 700; margin-top: 4px; }
+        .inventory-gauge { height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; margin-top: 4px; }
+        .inventory-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+        .kill-btn { background: var(--red); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-family: inherit; font-weight: 600; font-size: 12px; }
+        .kill-btn:hover { background: #da3633; }
+        .quote-row-bid { border-left: 3px solid var(--green); }
+        .quote-row-ask { border-left: 3px solid var(--red); }
+        .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+        .badge-green { background: #3fb95033; color: var(--green); }
+        .badge-red { background: #f8514933; color: var(--red); }
+        .badge-orange { background: #d2992233; color: var(--orange); }
+        .adverse-bar { height: 24px; background: #21262d; border-radius: 4px; overflow: hidden; position: relative; margin: 8px 0; }
+        .adverse-fill { height: 100%; transition: width 0.5s ease; }
+        .adverse-label { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 11px; font-weight: 600; }
+        .threshold-line { position: absolute; top: 0; height: 100%; width: 2px; background: var(--red); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>STRAT-006 | Market Making (Avellaneda-Stoikov)</h1>
+        <div style="display: flex; gap: 12px; align-items: center;">
+            <span class="mode {{ 'mode-paper' if mode == 'paper' else 'mode-live' }}">
+                {{ mode | upper }}
+            </span>
+            <button class="kill-btn" onclick="killSwitch()">KILL SWITCH</button>
+        </div>
+    </div>
+
+    <div class="status-bar">
+        <div class="stat">Uptime: <span class="stat-value" id="uptime">{{ uptime }}</span></div>
+        <div class="stat">Memory: <span class="stat-value" id="memory">{{ memory_mb }}MB</span></div>
+        <div class="stat">Instruments: <span class="stat-value">{{ positions | length }}</span></div>
+        <div class="stat">Session: <span class="stat-value" id="session-time">--</span></div>
+    </div>
+
+    <!-- Key Metrics -->
+    <div class="grid">
+        <div class="card grid-wide">
+            <div class="card-title">Key Metrics</div>
+            <div class="metric-grid">
+                <div class="metric-box">
+                    <div class="metric-label">Daily PnL</div>
+                    <div class="metric-value" id="daily-pnl">--</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Spread Captured</div>
+                    <div class="metric-value" id="spread-captured">--</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Fill Rate</div>
+                    <div class="metric-value" id="fill-rate">--</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Adverse Selection</div>
+                    <div class="metric-value" id="adverse-rate">--</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Round Trips</div>
+                    <div class="metric-value" id="round-trips">--</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">RT Win Rate</div>
+                    <div class="metric-value" id="rt-win-rate">--</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">Active Quotes</div>
+                    <div class="metric-value" id="active-quotes">--</div>
+                </div>
+                <div class="metric-box">
+                    <div class="metric-label">API Usage</div>
+                    <div class="metric-value" id="api-usage">--</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active Quotes / Order Book Position -->
+        <div class="card grid-half">
+            <div class="card-title">Active Quotes (Order Book Position)</div>
+            <table>
+                <thead>
+                    <tr><th>Symbol</th><th>Side</th><th>Layer</th><th>Price</th><th>Qty</th><th>Age</th></tr>
+                </thead>
+                <tbody id="quotes-table">
+                    <tr><td colspan="6" style="text-align:center; color: var(--text-dim);">Waiting for data...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Inventory Gauge -->
+        <div class="card">
+            <div class="card-title">Inventory</div>
+            <div id="inventory-gauges">
+                <p style="color: var(--text-dim); text-align: center;">Waiting for data...</p>
+            </div>
+        </div>
+
+        <!-- Adverse Selection -->
+        <div class="card">
+            <div class="card-title">Adverse Selection</div>
+            <div id="adverse-section">
+                <p style="color: var(--text-dim); text-align: center;">Waiting for data...</p>
+            </div>
+        </div>
+
+        <!-- Model Parameters -->
+        <div class="card">
+            <div class="card-title">Model Parameters</div>
+            <table>
+                <thead>
+                    <tr><th>Symbol</th><th>&sigma;</th><th>&kappa;</th><th>&gamma;</th><th>T-t</th><th>Reservation</th><th>Spread%</th></tr>
+                </thead>
+                <tbody id="model-table">
+                    <tr><td colspan="7" style="text-align:center; color: var(--text-dim);">Waiting for data...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Risk -->
+        <div class="card">
+            <div class="card-title">Risk Status</div>
+            <div id="risk-section">
+                <p style="color: var(--text-dim); text-align: center;">Waiting for data...</p>
+            </div>
+        </div>
+
+        <!-- Recent Fills -->
+        <div class="card grid-wide">
+            <div class="card-title">Recent Fills</div>
+            <table>
+                <thead>
+                    <tr><th>Time</th><th>Symbol</th><th>Side</th><th>Price</th><th>Qty</th><th>Mid@Fill</th><th>Spread Cap.</th><th>Layer</th></tr>
+                </thead>
+                <tbody id="fills-table">
+                    <tr><td colspan="8" style="text-align:center; color: var(--text-dim);">No fills yet</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const wsUrl = '{{ ws_url }}';
+        let ws;
+
+        function connectWS() {
+            ws = new WebSocket(wsUrl);
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.type === 'update') updateDashboard(data);
+            };
+            ws.onclose = () => setTimeout(connectWS, 3000);
+            ws.onerror = () => ws.close();
+        }
+
+        function updateDashboard(data) {
+            // Status bar
+            if (data.uptime) document.getElementById('uptime').textContent = data.uptime;
+            if (data.memory_mb) document.getElementById('memory').textContent = data.memory_mb + 'MB';
+
+            const metrics = data.metrics || {};
+            const risk = data.risk || {};
+            const adverse = data.adverse_selection || {};
+            const quotes = data.quotes || {};
+            const model = data.model || {};
+
+            // Key metrics
+            setValue('daily-pnl', formatPnl(risk.daily_pnl?.net_pnl || 0));
+            setValue('spread-captured', (metrics.avg_spread_captured || 0).toFixed(6));
+            setValue('fill-rate', ((metrics.fill_rate || 0) * 100).toFixed(1) + '%');
+            setValue('adverse-rate', ((adverse.overall_rate || 0) * 100).toFixed(1) + '%', adverse.overall_rate > 0.6 ? 'negative' : '');
+            setValue('round-trips', metrics.round_trips || 0);
+            setValue('rt-win-rate', ((metrics.round_trip_win_rate || 0) * 100).toFixed(1) + '%');
+            setValue('active-quotes', metrics.active_quotes || 0);
+
+            const rl = metrics.rate_limit?.futures || {};
+            setValue('api-usage', (rl.utilization_pct || 0).toFixed(0) + '%');
+
+            // Quotes table
+            updateQuotesTable(quotes);
+
+            // Model table
+            updateModelTable(model);
+
+            // Inventory gauges
+            updateInventory(risk.inventory || {});
+
+            // Adverse section
+            updateAdverse(adverse);
+
+            // Risk section
+            updateRisk(risk);
+
+            // Fills table
+            if (data.positions) {
+                // fills come from trades provider
+            }
+        }
+
+        function updateQuotesTable(quotes) {
+            const tbody = document.getElementById('quotes-table');
+            let html = '';
+            for (const [sym, orders] of Object.entries(quotes)) {
+                for (const [key, q] of Object.entries(orders)) {
+                    const cls = q.side === 'BUY' ? 'quote-row-bid' : 'quote-row-ask';
+                    const color = q.side === 'BUY' ? 'positive' : 'negative';
+                    html += `<tr class="${cls}">
+                        <td>${sym}</td>
+                        <td class="${color}">${q.side}</td>
+                        <td>L${q.layer}</td>
+                        <td>${q.price.toFixed(6)}</td>
+                        <td>${q.quantity.toFixed(4)}</td>
+                        <td>${q.age_s.toFixed(0)}s</td>
+                    </tr>`;
+                }
+            }
+            tbody.innerHTML = html || '<tr><td colspan="6" style="text-align:center; color: var(--text-dim);">No active quotes</td></tr>';
+        }
+
+        function updateModelTable(model) {
+            const tbody = document.getElementById('model-table');
+            let html = '';
+            for (const [sym, m] of Object.entries(model)) {
+                if (!m) continue;
+                html += `<tr>
+                    <td>${sym}</td>
+                    <td>${(m.sigma || 0).toFixed(6)}</td>
+                    <td>${(m.kappa || 0).toFixed(1)}</td>
+                    <td>${(m.gamma || 0).toFixed(3)}</td>
+                    <td>${(m.time_remaining || 0).toFixed(2)}h</td>
+                    <td>${(m.reservation_price || 0).toFixed(6)}</td>
+                    <td>${((m.quotes?.spread_pct || 0) * 100).toFixed(4)}%</td>
+                </tr>`;
+            }
+            tbody.innerHTML = html || '<tr><td colspan="7" style="text-align:center; color: var(--text-dim);">No model data</td></tr>';
+        }
+
+        function updateInventory(inventory) {
+            const div = document.getElementById('inventory-gauges');
+            let html = '';
+            for (const [sym, inv] of Object.entries(inventory)) {
+                const pct = Math.min(Math.abs(inv.pct_of_equity || 0), 5);
+                const width = (pct / 5) * 100;
+                const color = pct > 3 ? 'var(--red)' : pct > 2 ? 'var(--orange)' : 'var(--green)';
+                const dir = inv.direction || 'FLAT';
+                const badge = dir === 'LONG' ? 'badge-green' : dir === 'SHORT' ? 'badge-red' : 'badge-orange';
+                html += `<div style="margin-bottom: 12px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span>${sym} <span class="badge ${badge}">${dir}</span></span>
+                        <span>${(inv.pct_of_equity || 0).toFixed(2)}% / 4%</span>
+                    </div>
+                    <div class="inventory-gauge">
+                        <div class="inventory-fill" style="width: ${width}%; background: ${color};"></div>
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;">
+                        Qty: ${(inv.qty || 0).toFixed(4)} | Notional: $${(inv.notional || 0).toFixed(2)} | Phase: ${inv.phase || 0}
+                    </div>
+                </div>`;
+            }
+            div.innerHTML = html || '<p style="color: var(--text-dim); text-align: center;">No inventory</p>';
+        }
+
+        function updateAdverse(adverse) {
+            const div = document.getElementById('adverse-section');
+            let html = '';
+            const symbols = adverse.per_symbol || {};
+            for (const [sym, data] of Object.entries(symbols)) {
+                const rate = (data.rate || 0) * 100;
+                const color = rate > 70 ? 'var(--red)' : rate > 60 ? 'var(--orange)' : 'var(--green)';
+                const status = data.is_halted ? 'HALTED' : data.is_widened ? 'WIDENED' : 'NORMAL';
+                const statusBadge = data.is_halted ? 'badge-red' : data.is_widened ? 'badge-orange' : 'badge-green';
+                html += `<div style="margin-bottom: 12px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                        <span>${sym} <span class="badge ${statusBadge}">${status}</span></span>
+                        <span>${rate.toFixed(1)}% (${data.checks || 0} fills)</span>
+                    </div>
+                    <div class="adverse-bar">
+                        <div class="adverse-fill" style="width: ${Math.min(rate, 100)}%; background: ${color};"></div>
+                        <div class="threshold-line" style="left: 60%;"></div>
+                        <div class="threshold-line" style="left: 70%;"></div>
+                        <span class="adverse-label">${rate.toFixed(1)}%</span>
+                    </div>
+                </div>`;
+            }
+            html += `<div style="font-size: 11px; color: var(--text-dim); margin-top: 8px;">
+                Total checks: ${adverse.total_checks || 0} | Pending: ${adverse.pending_checks || 0}
+            </div>`;
+            div.innerHTML = html || '<p style="color: var(--text-dim); text-align: center;">No adverse data</p>';
+        }
+
+        function updateRisk(risk) {
+            const div = document.getElementById('risk-section');
+            const dd = risk.drawdown || {};
+            const halted = risk.is_halted;
+            let html = `
+                <div style="margin-bottom: 8px;">
+                    <span>Status: </span>
+                    <span class="badge ${halted ? 'badge-red' : 'badge-green'}">${halted ? 'HALTED' : 'ACTIVE'}</span>
+                    ${halted ? '<br><span class="negative" style="font-size:11px;">' + (risk.halt_reason || '') + '</span>' : ''}
+                </div>
+                <table>
+                    <tr><td>Daily DD</td><td class="${(dd.daily||0) > 0.5 ? 'warning' : ''}">${(dd.daily||0).toFixed(3)}% / 1.0%</td></tr>
+                    <tr><td>Weekly DD</td><td>${(dd.weekly||0).toFixed(3)}% / 2.0%</td></tr>
+                    <tr><td>Monthly DD</td><td>${(dd.monthly||0).toFixed(3)}% / 4.0%</td></tr>
+                    <tr><td>Equity</td><td>$${(risk.total_equity||0).toFixed(2)}</td></tr>
+                    <tr><td>Allocated</td><td>$${(risk.allocated_capital||0).toFixed(2)}</td></tr>
+                </table>
+            `;
+            div.innerHTML = html;
+        }
+
+        function formatPnl(value) {
+            const v = parseFloat(value) || 0;
+            const el = document.getElementById('daily-pnl');
+            if (el) el.className = 'metric-value ' + (v >= 0 ? 'positive' : 'negative');
+            return (v >= 0 ? '+' : '') + v.toFixed(4);
+        }
+
+        function setValue(id, value, cls) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = value;
+                if (cls) el.className = 'metric-value ' + cls;
+            }
+        }
+
+        function killSwitch() {
+            if (confirm('KILL SWITCH: Cancel ALL orders and liquidate ALL inventory?')) {
+                fetch('/kill', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({reason: 'Dashboard kill switch'})
+                }).then(r => r.json()).then(d => alert('Kill switch executed: ' + JSON.stringify(d)));
+            }
+        }
+
+        // Initialize
+        connectWS();
+    </script>
+</body>
+</html>

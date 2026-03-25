@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ strategy_name }} Dashboard — {{ strategy_id }}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0a0e17; color: #e0e0e0; }
+        .header { background: linear-gradient(135deg, #1a1f2e, #0d1117); padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2d333b; }
+        .header h1 { font-size: 1.4em; color: #58a6ff; }
+        .header .meta { font-size: 0.85em; color: #8b949e; }
+        .mode-paper { color: #f0ad4e; font-weight: bold; }
+        .mode-live { color: #dc3545; font-weight: bold; }
+
+        .grid-container { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; max-width: 1600px; margin: 0 auto; }
+        .full-width { grid-column: 1 / -1; }
+
+        .card { background: #161b22; border: 1px solid #2d333b; border-radius: 8px; padding: 16px; }
+        .card h3 { color: #58a6ff; margin-bottom: 12px; font-size: 1em; border-bottom: 1px solid #2d333b; padding-bottom: 8px; }
+
+        .metric-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1c2128; }
+        .metric-row:last-child { border-bottom: none; }
+        .metric-label { color: #8b949e; }
+        .metric-value { font-weight: 600; font-family: 'Courier New', monospace; }
+        .positive { color: #3fb950; }
+        .negative { color: #f85149; }
+        .warning { color: #f0ad4e; }
+
+        /* Grid Visualization */
+        .grid-viz { width: 100%; overflow-x: auto; }
+        .grid-levels { display: flex; flex-direction: column; gap: 2px; max-height: 500px; overflow-y: auto; }
+        .grid-level { display: flex; align-items: center; padding: 4px 8px; border-radius: 4px; font-size: 0.82em; font-family: 'Courier New', monospace; }
+        .grid-level.buy-active { background: rgba(46, 160, 67, 0.15); border-left: 3px solid #3fb950; }
+        .grid-level.sell-active { background: rgba(248, 81, 73, 0.15); border-left: 3px solid #f85149; }
+        .grid-level.filled { background: rgba(88, 166, 255, 0.15); border-left: 3px solid #58a6ff; }
+        .grid-level.empty { background: rgba(139, 148, 158, 0.05); border-left: 3px solid #30363d; }
+        .grid-level .idx { width: 30px; color: #8b949e; }
+        .grid-level .price { width: 120px; }
+        .grid-level .side { width: 50px; font-weight: bold; }
+        .grid-level .status { flex: 1; text-align: right; }
+        .grid-level .current-marker { color: #f0ad4e; font-weight: bold; margin-left: 8px; }
+
+        .range-bar { position: relative; height: 40px; background: #1c2128; border-radius: 4px; margin: 12px 0; overflow: hidden; }
+        .range-fill { position: absolute; height: 100%; background: linear-gradient(90deg, #3fb950, #58a6ff, #f85149); opacity: 0.3; }
+        .range-marker { position: absolute; width: 3px; height: 100%; background: #f0ad4e; }
+        .range-label { position: absolute; top: 50%; transform: translateY(-50%); font-size: 0.7em; padding: 0 4px; }
+
+        /* Cycle ticker */
+        .cycle-ticker { display: flex; gap: 16px; flex-wrap: wrap; }
+        .cycle-stat { text-align: center; padding: 12px 16px; background: #1c2128; border-radius: 6px; min-width: 120px; }
+        .cycle-stat .value { font-size: 1.6em; font-weight: bold; font-family: 'Courier New', monospace; }
+        .cycle-stat .label { font-size: 0.75em; color: #8b949e; margin-top: 4px; }
+
+        .alerts { max-height: 250px; overflow-y: auto; }
+        .alert-item { padding: 8px; margin-bottom: 4px; border-radius: 4px; font-size: 0.85em; border-left: 3px solid; }
+        .alert-info { background: rgba(88, 166, 255, 0.1); border-color: #58a6ff; }
+        .alert-warning { background: rgba(240, 173, 78, 0.1); border-color: #f0ad4e; }
+        .alert-critical { background: rgba(248, 81, 73, 0.1); border-color: #f85149; }
+
+        .kill-btn { background: #dc3545; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 0.9em; }
+        .kill-btn:hover { background: #c82333; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+        th { text-align: left; padding: 8px; border-bottom: 2px solid #2d333b; color: #8b949e; }
+        td { padding: 6px 8px; border-bottom: 1px solid #1c2128; font-family: 'Courier New', monospace; }
+
+        @media (max-width: 900px) { .grid-container { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div>
+        <h1>{{ strategy_name }} ({{ strategy_id }})</h1>
+        <span class="meta">Uptime: {{ uptime }} | Memory: {{ memory_mb }}MB</span>
+    </div>
+    <div>
+        <span class="mode-{{ mode }}">{{ mode | upper }}</span>
+        <button class="kill-btn" onclick="killSwitch()" style="margin-left:16px;">KILL SWITCH</button>
+    </div>
+</div>
+
+<div class="grid-container">
+
+    <!-- Cycle Ticker -->
+    <div class="card full-width">
+        <h3>Grid Performance Ticker</h3>
+        <div class="cycle-ticker" id="cycle-ticker">
+            <div class="cycle-stat">
+                <div class="value positive" id="total-cycles">0</div>
+                <div class="label">Completed Cycles</div>
+            </div>
+            <div class="cycle-stat">
+                <div class="value" id="total-profit">$0.00</div>
+                <div class="label">Total Cycle Profit</div>
+            </div>
+            <div class="cycle-stat">
+                <div class="value" id="avg-profit">$0.00</div>
+                <div class="label">Avg Profit/Cycle</div>
+            </div>
+            <div class="cycle-stat">
+                <div class="value" id="cycles-per-day">0</div>
+                <div class="label">Cycles/Day</div>
+            </div>
+            <div class="cycle-stat">
+                <div class="value" id="total-fees">$0.00</div>
+                <div class="label">Total Fees</div>
+            </div>
+            <div class="cycle-stat">
+                <div class="value" id="unrealized-pnl">$0.00</div>
+                <div class="label">Unrealized PnL</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Grid Visualization per instrument -->
+    <div class="card" id="grid-viz-container">
+        <h3>Grid Levels</h3>
+        <div id="grid-viz">
+            <p style="color:#8b949e;">Loading grid data...</p>
+        </div>
+    </div>
+
+    <!-- Risk Summary -->
+    <div class="card">
+        <h3>Risk & Exposure</h3>
+        <div id="risk-summary">
+            <div class="metric-row"><span class="metric-label">Total Equity</span><span class="metric-value" id="equity">--</span></div>
+            <div class="metric-row"><span class="metric-label">Inventory Value</span><span class="metric-value" id="inv-value">--</span></div>
+            <div class="metric-row"><span class="metric-label">Inventory % of Equity</span><span class="metric-value" id="inv-pct">--</span></div>
+            <div class="metric-row"><span class="metric-label">Unrealized PnL</span><span class="metric-value" id="unreal-pnl">--</span></div>
+            <div class="metric-row"><span class="metric-label">Leverage</span><span class="metric-value" id="leverage">--</span></div>
+            <div class="metric-row"><span class="metric-label">Halted Instruments</span><span class="metric-value" id="halted">None</span></div>
+        </div>
+    </div>
+
+    <!-- Performance Metrics -->
+    <div class="card">
+        <h3>Performance Metrics (Section 10)</h3>
+        <div id="perf-metrics">
+            <div class="metric-row"><span class="metric-label">Total PnL</span><span class="metric-value" id="total-pnl">--</span></div>
+            <div class="metric-row"><span class="metric-label">Win Rate</span><span class="metric-value" id="win-rate">--</span></div>
+            <div class="metric-row"><span class="metric-label">Sharpe Ratio</span><span class="metric-value" id="sharpe">--</span></div>
+            <div class="metric-row"><span class="metric-label">Max Drawdown</span><span class="metric-value" id="max-dd">--</span></div>
+            <div class="metric-row"><span class="metric-label">Profit Factor</span><span class="metric-value" id="profit-factor">--</span></div>
+            <div class="metric-row"><span class="metric-label">Grid Utilization</span><span class="metric-value" id="grid-util">--</span></div>
+            <div class="metric-row"><span class="metric-label">Range Containment</span><span class="metric-value" id="containment">--</span></div>
+            <div class="metric-row"><span class="metric-label">Fill Latency (avg)</span><span class="metric-value" id="latency">--</span></div>
+        </div>
+    </div>
+
+    <!-- Positions -->
+    <div class="card">
+        <h3>Active Positions</h3>
+        <table>
+            <thead><tr><th>Symbol</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unreal. PnL</th><th>Levels</th></tr></thead>
+            <tbody id="positions-body">
+                <tr><td colspan="6" style="color:#8b949e;">No positions</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Alerts -->
+    <div class="card full-width">
+        <h3>Recent Alerts</h3>
+        <div class="alerts" id="alerts-container">
+            <p style="color:#8b949e;">No alerts</p>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    const wsUrl = "{{ ws_url }}";
+    let ws = null;
+
+    function connectWS() {
+        ws = new WebSocket(wsUrl);
+        ws.onmessage = (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                if (data.type === "update") updateDashboard(data);
+            } catch(err) {}
+        };
+        ws.onclose = () => setTimeout(connectWS, 3000);
+        ws.onerror = () => ws.close();
+        setInterval(() => { if (ws.readyState === 1) ws.send("ping"); }, 15000);
+    }
+
+    function updateDashboard(data) {
+        // Positions
+        const positions = data.positions || [];
+        const tbody = document.getElementById("positions-body");
+        if (positions.length > 0) {
+            tbody.innerHTML = positions.map(p => `
+                <tr>
+                    <td>${p.symbol}</td>
+                    <td>${p.quantity?.toFixed(6) || '--'}</td>
+                    <td>${p.entry_price?.toFixed(2) || '--'}</td>
+                    <td>${p.mark_price?.toFixed(2) || '--'}</td>
+                    <td class="${(p.unrealized_pnl||0) >= 0 ? 'positive' : 'negative'}">${(p.unrealized_pnl||0).toFixed(4)}</td>
+                    <td>${p.levels_filled || 0}</td>
+                </tr>
+            `).join('');
+        }
+
+        // Metrics
+        const m = data.metrics || {};
+        setVal('total-pnl', fmtUSD(m.total_pnl));
+        setVal('win-rate', (m.win_rate * 100)?.toFixed(1) + '%');
+        setVal('sharpe', m.sharpe_ratio?.all_time?.toFixed(2));
+        setVal('max-dd', m.max_drawdown?.pct?.toFixed(2) + '%');
+        setVal('profit-factor', m.profit_factor?.toFixed(2));
+
+        const gm = m.grid_metrics?.aggregate || {};
+        setVal('total-cycles', gm.total_cycles || 0);
+        setVal('total-profit', fmtUSD(gm.total_cycle_profit));
+        setVal('total-fees', fmtUSD(gm.total_fees));
+
+        // Per-instrument grid metrics
+        const pi = m.grid_metrics?.per_instrument || {};
+        const firstKey = Object.keys(pi)[0];
+        if (firstKey) {
+            const gmi = pi[firstKey];
+            setVal('avg-profit', fmtUSD(gmi.average_profit_per_cycle));
+            setVal('cycles-per-day', gmi.grid_cycle_frequency?.per_day?.toFixed(1));
+            setVal('unrealized-pnl', fmtUSD(gmi.current_unrealized_pnl), gmi.current_unrealized_pnl >= 0);
+            setVal('grid-util', gmi.grid_utilization_rate_pct?.toFixed(1) + '%');
+            setVal('containment', gmi.range_containment_rate_pct?.toFixed(1) + '%');
+            setVal('latency', gmi.order_placement_latency_ms?.avg?.toFixed(1) + 'ms');
+        }
+
+        // Alerts
+        const alerts = data.alerts || [];
+        if (alerts.length > 0) {
+            document.getElementById('alerts-container').innerHTML = alerts.slice(0, 20).map(a => {
+                const cls = a.level === 'CRITICAL' ? 'alert-critical' : a.level === 'WARNING' ? 'alert-warning' : 'alert-info';
+                const ts = new Date(a.timestamp * 1000).toLocaleTimeString();
+                return `<div class="alert-item ${cls}">[${ts}] <strong>${a.title}</strong> ${a.message}</div>`;
+            }).join('');
+        }
+    }
+
+    function setVal(id, val, isPositive) {
+        const el = document.getElementById(id);
+        if (el && val !== undefined && val !== null) {
+            el.textContent = val;
+            if (isPositive !== undefined) {
+                el.className = 'metric-value ' + (isPositive ? 'positive' : 'negative');
+            }
+        }
+    }
+
+    function fmtUSD(v) {
+        if (v === undefined || v === null) return '--';
+        return '$' + Number(v).toFixed(4);
+    }
+
+    function killSwitch() {
+        if (confirm('CONFIRM: Activate emergency kill switch? This will cancel all orders and liquidate all positions.')) {
+            fetch('/kill', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({reason:'Dashboard kill switch'}) })
+            .then(r => r.json()).then(d => alert('Kill switch result: ' + JSON.stringify(d)));
+        }
+    }
+
+    // Fetch grid visualization data
+    async function loadGridViz() {
+        try {
+            const resp = await fetch('/api/grid');
+            const data = await resp.json();
+            renderGrid(data);
+        } catch(e) {}
+        setTimeout(loadGridViz, 5000);
+    }
+
+    function renderGrid(data) {
+        const container = document.getElementById('grid-viz');
+        let html = '';
+        for (const [symbol, grid] of Object.entries(data)) {
+            html += `<h4 style="color:#58a6ff;margin:8px 0 4px;">${symbol} — ${grid.grid_type} grid, ${grid.num_levels} levels, spacing ${grid.grid_spacing_pct}%</h4>`;
+            html += `<div style="font-size:0.8em;color:#8b949e;margin-bottom:6px;">Range: ${grid.lower_boundary?.toFixed(2)} - ${grid.upper_boundary?.toFixed(2)} (${grid.range_width_pct}%)</div>`;
+
+            if (grid.halted) html += `<div style="color:#f85149;font-weight:bold;">HALTED: ${grid.halt_reason}</div>`;
+
+            html += '<div class="grid-levels">';
+            const levels = grid.levels || [];
+            for (let i = levels.length - 1; i >= 0; i--) {
+                const l = levels[i];
+                let cls = 'empty';
+                if (l.status === 'filled') cls = 'filled';
+                else if (l.status === 'active' && l.side === 'BUY') cls = 'buy-active';
+                else if (l.status === 'active' && l.side === 'SELL') cls = 'sell-active';
+
+                const isNear = grid.current_price && Math.abs(l.price - grid.current_price) / grid.current_price < 0.002;
+
+                html += `<div class="grid-level ${cls}">`;
+                html += `<span class="idx">${l.index}</span>`;
+                html += `<span class="price">${l.price?.toFixed(2)}</span>`;
+                html += `<span class="side" style="color:${l.side === 'BUY' ? '#3fb950' : l.side === 'SELL' ? '#f85149' : '#8b949e'}">${l.side || '-'}</span>`;
+                html += `<span class="status">${l.status}</span>`;
+                if (isNear) html += `<span class="current-marker">&larr; PRICE</span>`;
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+        container.innerHTML = html || '<p style="color:#8b949e;">No grid data</p>';
+    }
+
+    // Fetch risk data
+    async function loadRisk() {
+        try {
+            const resp = await fetch('/api/risk');
+            const data = await resp.json();
+            setVal('equity', fmtUSD(data.total_equity));
+            setVal('inv-value', fmtUSD(data.total_inventory_value));
+            setVal('inv-pct', data.inventory_pct_of_equity?.toFixed(1) + '%');
+            const unreal = data.total_unrealized_pnl || 0;
+            const el = document.getElementById('unreal-pnl');
+            if (el) { el.textContent = fmtUSD(unreal); el.className = 'metric-value ' + (unreal >= 0 ? 'positive' : 'negative'); }
+            setVal('leverage', data.leverage + 'x');
+            const halted = data.halted_instruments || {};
+            const haltedKeys = Object.keys(halted);
+            setVal('halted', haltedKeys.length > 0 ? haltedKeys.join(', ') : 'None');
+        } catch(e) {}
+        setTimeout(loadRisk, 5000);
+    }
+
+    connectWS();
+    loadGridViz();
+    loadRisk();
+</script>
+
+</body>
+</html>

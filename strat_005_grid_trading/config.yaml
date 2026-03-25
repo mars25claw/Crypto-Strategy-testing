@@ -1,0 +1,142 @@
+# ============================================================================
+# STRAT-005 Grid Trading Bot — Configuration
+# ============================================================================
+strategy_id: "STRAT-005"
+strategy_name: "Grid Trading"
+mode: "paper"  # "paper" or "live"
+
+instruments:
+  - "BTCUSDT"
+  - "ETHUSDT"
+
+binance:
+  api_key: ""
+  api_secret: ""
+  testnet: false
+  spot_base_url: "https://api.binance.com"
+  futures_base_url: "https://fapi.binance.com"
+  spot_ws_url: "wss://stream.binance.com:9443"
+  futures_ws_url: "wss://fstream.binance.com"
+  recv_window: 5000
+  time_sync_interval: 60
+
+risk:
+  max_capital_pct: 20.0          # Section 5.1: 20% of total equity
+  max_per_trade_pct: 10.0        # Section 5.1: 10% per instrument
+  risk_per_trade_pct: 1.0
+  max_leverage: 2                # Section 6.2: max 2x
+  preferred_leverage: 1          # Section 6.2: prefer 1x
+  max_concurrent_positions: 4    # max 4 instruments
+  max_per_asset_pct: 10.0
+  max_long_exposure_pct: 20.0
+  max_short_exposure_pct: 20.0
+  max_net_directional_pct: 20.0
+  daily_drawdown_pct: 2.0        # Section 5.3: daily 2%
+  weekly_drawdown_pct: 4.0       # Section 5.3: weekly 4%
+  monthly_drawdown_pct: 7.0      # Section 5.3: monthly 7%
+  system_wide_drawdown_pct: 15.0
+
+paper_trading:
+  enabled: true
+  starting_equity: 10000.0
+  maker_fee_pct: 0.02
+  taker_fee_pct: 0.04
+  slippage_model: "orderbook_walk"
+
+dashboard:
+  host: "0.0.0.0"
+  port: 8085
+  enable_kill_switch: true
+
+alerting:
+  enabled: true
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  discord_webhook_url: ""
+
+database:
+  url: "sqlite:///data/strat_005.db"
+  echo: false
+
+logging:
+  level: "INFO"
+  log_dir: "data/logs"
+  rotate_days: 30
+  trade_log_permanent: true
+
+state:
+  persistence_interval: 5.0      # Section 8.1: every 5 seconds
+  snapshot_count: 3
+  state_dir: "data/state"
+
+memory:
+  check_interval: 60
+  warn_mb: 500
+  restart_mb: 1000
+  max_candles_per_tf: 500
+  cache_clear_hours: 24
+
+heartbeat:
+  interval: 10
+  timeout: 30
+  max_restarts_per_hour: 3
+
+rate_limit_weight_per_min: 250   # Section 12.2: budget 250 weight/minute
+rate_limit_burst_weight: 500     # Section 12.2: burst 500 for 2 minutes
+
+# ============================================================================
+# Grid-specific strategy parameters
+# ============================================================================
+strategy_params:
+  # --- Grid structure ---
+  grid_type: "geometric"          # "geometric" (default) or "arithmetic"
+  num_levels: 20                  # Section 3.2: 10-50, default 20
+  atr_multiplier: 2.0            # Section 3.1: +/- 2.0x daily ATR
+  atr_period: 14                 # ATR(14) on daily candles
+  initial_mode: "neutral"        # "neutral" or "long_biased" (Section 3.3)
+
+  # --- Range validation ---
+  range_min_pct: 5.0             # Section 3.1: min 5% range width
+  range_max_pct: 25.0            # Section 3.1: max 25% range width
+  min_spacing_fee_multiple: 4.0  # Section 3.2: spacing > 4x maker fees
+
+  # --- Inventory & exposure ---
+  max_inventory_pct: 60.0        # Section 5.2: max 60% of levels filled
+  unrealized_loss_halt_pct: 3.0  # Section 5.3: 3% equity cancel buys
+  hard_stop_loss_pct: 5.0        # Section 5.4: 5% equity liquidate all
+  profit_extraction_pct: 5.0     # Section 4.4: extract at 5% of capital
+
+  # --- Filters ---
+  adx_max: 25                    # Section 7.1: ADX < 25 required
+  ema_divergence_max_pct: 2.0    # Section 7.1: EMA 20 vs 50 < 2%
+  volatility_min_pct: 1.5        # Section 7.2: daily ATR as % of price min
+  volatility_max_pct: 5.0        # Section 7.2: daily ATR as % of price max
+  spread_max_pct: 0.05           # Section 7.3: bid-ask spread < 0.05%
+
+  # --- Circuit breakers ---
+  consecutive_levels_halt: 8     # Section 5.5: 8 consecutive levels
+  flash_crash_pct: 5.0           # Section 5.5: >5% in 5 min
+  flash_crash_minutes: 5
+  volume_spike_multiplier: 5.0   # Section 5.5: 5x 20-period average
+  whipsaw_cooldown_hours: 12.0   # Section 7.5: 12-hour cooldown
+  consecutive_loss_halt_hours: 48.0  # Section 7.6: 48-hour halt
+
+  # --- Breakout handling ---
+  breakout_candles_confirm: 2    # Section 4.1: 2 consecutive 4h closes
+  breakout_candle_tf: "4h"
+  downside_option: "A"           # "A" = hold+widen, "B" = liquidate
+  hard_stop_atr_multiple: 1.5    # Section 4.2: 1.5x ATR below lower boundary
+
+  # --- Grid refresh ---
+  daily_refresh_utc_hour: 0      # Section 4.5: 00:00 UTC
+  refresh_boundary_threshold_pct: 5.0  # Section 4.5: >5% boundary change
+
+  # --- Order monitoring ---
+  order_monitor_interval_s: 60   # Section 8.3: every 60 seconds
+  max_orders_per_instrument: 40  # Section 11.5: Binance 40 order limit
+
+  # --- Paper trading go-live ---
+  paper_min_days: 45             # Section 9.3: 45-day minimum
+  paper_min_profitable_pct: 60.0 # Section 9.3: 60% profitable days
+  paper_max_inventory_dd_pct: 5.0
+  paper_min_cycle_completion_pct: 50.0

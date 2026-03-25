@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  strat-009-signal-dca:
+    build:
+      context: ..
+      dockerfile: strat_009_signal_dca/Dockerfile
+    container_name: strat-009-signal-dca
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8089:8080"
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+      - ./templates:/app/templates:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; r = httpx.get('http://localhost:8080/health'); r.raise_for_status()"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - CONFIG_PATH=/app/config.yaml
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"

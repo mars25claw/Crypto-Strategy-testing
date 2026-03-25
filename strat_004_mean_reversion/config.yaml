@@ -1,0 +1,207 @@
+# ==============================================================================
+# STRAT-004 Mean Reversion — Configuration
+# ==============================================================================
+
+strategy_id: "STRAT-004"
+strategy_name: "Mean Reversion"
+mode: "paper"  # "paper" or "live"
+
+# ------------------------------------------------------------------------------
+# Instruments (max 8, must have Hurst < 0.5 to trade)
+# ------------------------------------------------------------------------------
+instruments:
+  - "BTCUSDT"
+  - "ETHUSDT"
+  - "SOLUSDT"
+  - "BNBUSDT"
+  - "XRPUSDT"
+  - "ADAUSDT"
+  - "AVAXUSDT"
+  - "DOGEUSDT"
+
+# ------------------------------------------------------------------------------
+# Binance API (overridden by env vars BINANCE_API_KEY / BINANCE_API_SECRET)
+# ------------------------------------------------------------------------------
+binance:
+  api_key: ""
+  api_secret: ""
+  testnet: true
+  futures_base_url: "https://testnet.binancefuture.com"
+  futures_ws_url: "wss://fstream.binancefuture.com"
+  recv_window: 5000
+  time_sync_interval: 60
+
+# ------------------------------------------------------------------------------
+# Risk management (STRAT-004 specific — conservative counter-trend)
+# ------------------------------------------------------------------------------
+risk:
+  max_capital_pct: 20.0          # 20% of total equity for this strategy
+  max_per_trade_pct: 4.0         # 4% per trade
+  risk_per_trade_pct: 1.0        # 1.0% risk per trade
+  max_leverage: 3
+  preferred_leverage: 2
+  max_concurrent_positions: 3    # selective — max 3 concurrent
+  max_per_asset_pct: 6.0         # 6% per asset
+  max_long_exposure_pct: 12.0
+  max_short_exposure_pct: 12.0
+  max_net_directional_pct: 12.0  # 12% net directional
+  daily_drawdown_pct: 2.0        # 2% daily halt
+  weekly_drawdown_pct: 4.0       # 4% weekly halt
+  monthly_drawdown_pct: 7.0      # 7% monthly halt
+  system_wide_drawdown_pct: 15.0
+
+# ------------------------------------------------------------------------------
+# Strategy parameters
+# ------------------------------------------------------------------------------
+strategy_params:
+  # --- Primary signals (4h) ---
+  bb_period: 20
+  bb_std: 2.5                    # 2.5 sigma (crypto-adapted)
+  zscore_period: 50
+  zscore_entry_threshold: 2.0    # |Z| > 2.0 for signal
+  zscore_emergency_threshold: 4.0 # |Z| > 4.0 → emergency exit
+  rsi_period: 14
+  rsi_oversold: 25               # stricter than standard 30
+  rsi_overbought: 75             # stricter than standard 70
+  min_signals_required: 2        # 2-of-3 agreement
+
+  # --- Reversal confirmation (15m) ---
+  volume_confirmation_multiplier: 1.0   # volume > 1.0× 20-period avg
+  volume_avg_period: 20
+  order_book_imbalance_long: 1.2        # buy/sell > 1.2 for longs
+  order_book_imbalance_short: 0.8       # buy/sell < 0.8 for shorts
+  max_confirmation_candles: 3           # 3 × 15m = 45 min max wait
+  signal_expiry_hours: 8                # 4h candle + next 4h
+  reversion_expiry_pct: 50.0            # 50% revert before entry → expired
+
+  # --- Regime filter (daily) ---
+  hurst_window: 100                     # 100 daily closes
+  hurst_aggressive_threshold: 0.40
+  hurst_standard_threshold: 0.50
+  hurst_pause_threshold: 0.55
+  adx_period: 14
+  adx_ideal_threshold: 20
+  adx_transitional_threshold: 25
+  adx_disable_threshold: 25
+  adx_exit_threshold: 30                # regime-change exit trigger
+  regime_recalc_timeout_s: 60           # 60s per instrument
+
+  # --- Exit / take-profit ---
+  tranche1_pct: 40                      # 40% at 50% reversion
+  tranche1_reversion_pct: 50
+  tranche2_pct: 30                      # 30% at 20 SMA
+  tranche3_pct: 30                      # 30% at opposite BB / Z±1.0
+  opposite_zscore_target: 1.0
+  hard_stop_sigma: 1.0                  # 1.0σ beyond extreme
+  hard_stop_zscore: 3.0                 # Z = ±3.0
+  dollar_cap_pct: 1.5                   # 1.5% max loss per trade
+  max_holding_days: 5
+  progress_check_days: 2.5              # close 50% if no progress
+  regime_change_exit_hours: 2           # close within 2h on regime change
+
+  # --- Filters ---
+  min_trade_interval_hours: 6           # 6h between trades per instrument
+  post_stop_cooldown_hours: 12          # 12h after stop loss
+  extreme_vol_atr_multiplier: 2.0       # ATR > 2× avg → extreme vol
+  extreme_vol_zscore_bump: 0.5          # raise Z threshold by 0.5
+  extreme_vol_size_reduction: 0.5       # halve position in extreme vol
+  fee_threshold_multiplier: 3.0         # expected > 3× fees
+  round_trip_fee_pct: 0.08
+  bb_width_min_pct: 2.0                 # skip if BB width < 2%
+  consecutive_loss_reduce_at: 3
+  consecutive_loss_reduce_pct: 25
+  consecutive_loss_halt_at: 5
+  blacklist_days: 7                     # anti-trend blacklist duration
+
+  # --- Leverage ---
+  high_vol_atr_threshold: 4.0           # ATR/price > 4% → reduce leverage
+  leverage_high_vol: 1
+  leverage_preferred: 2
+  leverage_max: 3
+
+  # --- Order placement ---
+  limit_order_timeout_s: 30
+  max_limit_attempts: 3
+  stop_placement_max_ms: 500
+
+# ------------------------------------------------------------------------------
+# Paper trading
+# ------------------------------------------------------------------------------
+paper_trading:
+  enabled: true
+  starting_equity: 10000.0
+  maker_fee_pct: 0.02
+  taker_fee_pct: 0.04
+  slippage_model: "orderbook_walk"
+
+# Go-live criteria (60-day paper period)
+go_live_criteria:
+  min_days: 60
+  min_trades: 40
+  min_win_rate: 50.0
+  min_profit_factor: 1.2
+  max_drawdown_pct: 10.0
+  min_sharpe: 0.7
+
+# ------------------------------------------------------------------------------
+# Dashboard
+# ------------------------------------------------------------------------------
+dashboard:
+  host: "0.0.0.0"
+  port: 8084
+  enable_kill_switch: true
+
+# ------------------------------------------------------------------------------
+# Alerting
+# ------------------------------------------------------------------------------
+alerting:
+  enabled: true
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  discord_webhook_url: ""
+
+# ------------------------------------------------------------------------------
+# Database
+# ------------------------------------------------------------------------------
+database:
+  url: "sqlite:///data/bot.db"
+  echo: false
+
+# ------------------------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  log_dir: "data/logs"
+  rotate_days: 30
+  trade_log_permanent: true
+
+# ------------------------------------------------------------------------------
+# State persistence
+# ------------------------------------------------------------------------------
+state:
+  persistence_interval: 5.0
+  snapshot_count: 3
+  state_dir: "data/state"
+
+# ------------------------------------------------------------------------------
+# Memory management
+# ------------------------------------------------------------------------------
+memory:
+  check_interval: 60
+  warn_mb: 500
+  restart_mb: 1000
+  max_candles_per_tf: 500
+  cache_clear_hours: 24
+
+# ------------------------------------------------------------------------------
+# Heartbeat
+# ------------------------------------------------------------------------------
+heartbeat:
+  interval: 10
+  timeout: 30
+  max_restarts_per_hour: 3
+
+# Rate limits
+rate_limit_weight_per_min: 150
+rate_limit_burst_weight: 300

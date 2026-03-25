@@ -1,0 +1,182 @@
+strategy_id: "STRAT-006"
+strategy_name: "Market Making"
+mode: "paper"  # "paper" or "live"
+
+# Target instruments — mid-tier perpetual futures ($30-200M daily volume)
+# DO NOT use BTC/ETH — spreads too tight for retail market making
+instruments:
+  - "DOGEUSDT"
+  - "DOTUSDT"
+  - "NEARUSDT"
+
+binance:
+  api_key: ""
+  api_secret: ""
+  testnet: false
+  futures_base_url: "https://fapi.binance.com"
+  futures_ws_url: "wss://fstream.binance.com"
+  recv_window: 5000
+  time_sync_interval: 60
+
+risk:
+  max_capital_pct: 15.0         # 15% of total account equity
+  max_per_trade_pct: 7.0        # 7% per instrument
+  max_per_asset_pct: 7.0
+  max_leverage: 3
+  preferred_leverage: 2
+  max_concurrent_positions: 3    # max 3 instruments
+  daily_drawdown_pct: 1.0        # Very tight for MM
+  weekly_drawdown_pct: 2.0
+  monthly_drawdown_pct: 4.0
+  system_wide_drawdown_pct: 15.0
+
+paper_trading:
+  enabled: true
+  starting_equity: 10000.0
+  maker_fee_pct: 0.02            # 0.02% maker fee
+  taker_fee_pct: 0.04            # 0.04% taker fee
+  slippage_model: "queue_position"
+
+dashboard:
+  host: "0.0.0.0"
+  port: 8086
+  enable_kill_switch: true
+
+alerting:
+  enabled: true
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  discord_webhook_url: ""
+
+database:
+  url: "sqlite:///data/bot.db"
+  echo: false
+
+logging:
+  level: "INFO"
+  log_dir: "data/logs"
+  rotate_days: 30
+  trade_log_permanent: true
+
+state:
+  persistence_interval: 3.0      # 3 seconds — faster than other strategies
+  snapshot_count: 3
+  state_dir: "data/state"
+
+memory:
+  check_interval: 60
+  warn_mb: 500
+  restart_mb: 1000
+  max_candles_per_tf: 500
+  cache_clear_hours: 24
+
+heartbeat:
+  interval: 10
+  timeout: 30
+  max_restarts_per_hour: 3
+
+# HIGHEST API consumption of all strategies
+rate_limit_weight_per_min: 400
+rate_limit_burst_weight: 800
+
+strategy_params:
+  # Avellaneda-Stoikov model parameters
+  base_gamma: 0.1                # Base risk aversion parameter
+  gamma_relaxed: 0.05            # When inventory < 25%
+  gamma_aggressive: 0.3          # When inventory > 50%
+  gamma_very_aggressive: 0.5     # When inventory > 75%
+
+  # Volatility
+  vol_window_minutes: 60         # Rolling window for sigma calculation
+  vol_update_interval: 900       # 15 minutes between vol recalculations
+
+  # Order book depth
+  depth_window_minutes: 30       # Average depth over 30 minutes
+
+  # Session
+  session_hours: 8               # 8-hour funding-aligned windows
+  session_resets_utc:             # Reset times
+    - "00:00"
+    - "08:00"
+    - "16:00"
+
+  # Spread constraints
+  min_spread_pct: 0.045          # 2x maker fee + 0.005% safety = 0.045%
+  max_spread_multiplier: 5.0     # Max = 5x market spread
+  min_viable_market_spread: 0.03 # Skip if market spread < 0.03%
+
+  # Quote management
+  quote_update_threshold: 0.0001 # 0.01% minimum change to update
+  quote_stale_seconds: 60        # Max time without update
+  quote_health_interval: 10      # Health check every 10 seconds
+  quote_max_distance_pct: 0.5    # Max 0.5% from mid-price
+
+  # Layering
+  layer1_pct: 0.40               # 40% at optimal spread
+  layer2_pct: 0.35               # 35% at 1x spread (wider)
+  layer3_pct: 0.25               # 25% at 1.5x spread (widest)
+  layer2_multiplier: 1.0         # Level 2 at delta (1x half-spread from reservation)
+  layer3_multiplier: 1.5         # Level 3 at 1.5x delta
+
+  # Position sizing
+  quote_capital_fraction: 0.2    # Base size = 20% of allocated capital / price
+
+  # Inventory limits (as pct of total equity, notional)
+  inventory_warn_pct: 2.0        # Increase gamma to 0.3
+  inventory_critical_pct: 3.0    # Stop accumulating side
+  inventory_emergency_pct: 4.0   # Market reduce to 2%
+  inventory_liquidation_delay_min: 30  # Phase 2 after 30 min
+  inventory_phase2_reduce_pct: 50     # Reduce by 50% in phase 2
+  inventory_phase3_pause_hours: 1     # Pause 1 hour after phase 3
+
+  # Adverse selection
+  adverse_fill_window: 100       # Track over last 100 fills
+  adverse_widen_threshold: 0.60  # >60% -> widen spreads 50%
+  adverse_halt_threshold: 0.70   # >70% -> halt instrument
+  adverse_check_delay_ms: 1000   # Check mid 1 second after fill
+
+  # Volatility spike protection
+  vol_spike_multiplier: 3.0      # 3x hourly avg -> withdraw
+  vol_spike_withdraw_minutes: 5  # Withdraw for 5 minutes
+  large_trade_multiplier: 5.0    # 5x avg trade size
+  large_trade_withdraw_seconds: 30
+
+  # Trend filter
+  ema_trend_threshold: 0.001     # 0.1%/h slope -> widen 25%
+  ema_trend_widen_pct: 0.25      # Widen by 25%
+  adx_halt_threshold: 30         # ADX > 30 -> halt
+  ema_period: 20                 # 1h EMA period
+
+  # Volume filter
+  min_24h_volume: 30000000       # $30M minimum
+  max_24h_volume: 200000000      # $200M maximum
+
+  # Liquidation cascade filter
+  liquidation_rate_threshold: 10 # >10 events per minute
+  liquidation_withdraw_minutes: 10
+
+  # Liquidity withdrawal filter
+  depth_drop_pct: 0.50           # >50% drop in 5 seconds
+  depth_drop_window_seconds: 5
+
+  # News/event filter
+  news_withdraw_before_minutes: 60
+  news_resume_after_minutes: 30
+
+  # Same-side fill protection
+  same_side_fill_count: 3        # 3+ fills same side in 10s
+  same_side_fill_window_seconds: 10
+
+  # Inventory blowout detection
+  blowout_window_hours: 1        # LONG<->SHORT swing in 1 hour -> halt
+
+  # Carry evaluation at session end
+  carry_favorable_threshold: 0.0 # Hold if funding rate is favorable (>0 for short)
+
+  # Paper trading go-live criteria
+  paper_min_days: 30
+  paper_min_profitable_day_pct: 70
+  paper_max_adverse_selection_pct: 55
+  paper_max_inventory_dd_pct: 2.0
+  paper_min_sharpe: 1.5
+  paper_min_spread_vs_fees: 2.0

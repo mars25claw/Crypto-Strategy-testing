@@ -1,0 +1,33 @@
+# STRAT-004 Mean Reversion — Python dependencies
+
+# Async HTTP client
+httpx>=0.25.0,<1.0
+
+# WebSocket client
+websockets>=12.0,<14.0
+
+# YAML config
+PyYAML>=6.0
+
+# Numeric / indicators
+numpy>=1.24.0,<2.0
+
+# Web dashboard
+fastapi>=0.104.0,<1.0
+uvicorn[standard]>=0.24.0,<1.0
+jinja2>=3.1.0,<4.0
+python-multipart>=0.0.6
+
+# System monitoring
+psutil>=5.9.0
+
+# Database (SQLite via SQLAlchemy)
+sqlalchemy>=2.0,<3.0
+aiosqlite>=0.19.0
+
+# Alerting (optional)
+python-telegram-bot>=20.0,<22.0
+aiohttp>=3.9.0,<4.0
+
+# Environment variables
+python-dotenv>=1.0.0

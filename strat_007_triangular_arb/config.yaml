@@ -1,0 +1,196 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# STRAT-007: Cross-Exchange & Triangular Arbitrage Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+strategy_id: "STRAT-007"
+strategy_name: "Cross-Exchange Triangular Arbitrage"
+mode: "paper"  # "paper" or "live"
+
+instruments:
+  - "BTCUSDT"
+  - "ETHUSDT"
+  - "SOLUSDT"
+  - "BNBUSDT"
+  - "XRPUSDT"
+  - "DOGEUSDT"
+  - "ADAUSDT"
+
+binance:
+  api_key: ""
+  api_secret: ""
+  testnet: false
+  spot_base_url: "https://api.binance.com"
+  futures_base_url: "https://fapi.binance.com"
+  spot_ws_url: "wss://stream.binance.com:9443"
+  futures_ws_url: "wss://fstream.binance.com"
+  recv_window: 5000
+  time_sync_interval: 60
+
+risk:
+  max_capital_pct: 15.0          # 15% of total account equity
+  max_per_trade_pct: 2.0         # Mode A: 2% per leg
+  max_per_asset_pct: 5.0
+  risk_per_trade_pct: 1.0
+  max_leverage: 2
+  preferred_leverage: 1
+  max_concurrent_positions: 4     # Max 2 concurrent arb executions × 2 legs
+  max_long_exposure_pct: 15.0
+  max_short_exposure_pct: 15.0
+  max_net_directional_pct: 2.0    # Should be ~0% normally
+  daily_drawdown_pct: 1.5
+  weekly_drawdown_pct: 2.5
+  monthly_drawdown_pct: 4.0
+  system_wide_drawdown_pct: 15.0
+
+paper_trading:
+  enabled: true
+  starting_equity: 10000.0
+  maker_fee_pct: 0.02
+  taker_fee_pct: 0.04
+  spot_taker_fee_pct: 0.10
+  slippage_model: "orderbook_walk"
+
+dashboard:
+  host: "0.0.0.0"
+  port: 8087
+  enable_kill_switch: true
+
+alerting:
+  enabled: true
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  discord_webhook_url: ""
+
+database:
+  url: "sqlite:///data/bot.db"
+  echo: false
+
+logging:
+  level: "INFO"
+  log_dir: "data/logs"
+  rotate_days: 30
+  trade_log_permanent: true
+
+state:
+  persistence_interval: 5.0
+  snapshot_count: 3
+  state_dir: "data/state"
+
+memory:
+  check_interval: 60
+  warn_mb: 500
+  restart_mb: 1000
+  max_candles_per_tf: 500
+  cache_clear_hours: 24
+
+heartbeat:
+  interval: 10
+  timeout: 30
+  max_restarts_per_hour: 3
+
+rate_limit_weight_per_min: 200
+rate_limit_burst_weight: 400
+
+# ── Strategy-Specific Parameters ─────────────────────────────────────────────
+strategy_params:
+
+  # ── Mode A: Spot-Futures Arbitrage ──────────────────────────────────────────
+  mode_a_enabled: true
+  mode_a_assets:
+    - "BTCUSDT"
+    - "ETHUSDT"
+    - "SOLUSDT"
+    - "BNBUSDT"
+    - "XRPUSDT"
+    - "DOGEUSDT"
+    - "ADAUSDT"
+
+  # Net profit thresholds (after fees)
+  mode_a_threshold_default_pct: 0.08
+  mode_a_threshold_min_pct: 0.05
+  mode_a_threshold_conservative_pct: 0.10
+  mode_a_max_per_leg_pct: 2.0       # % of equity per leg
+
+  # ── Mode B: Triangular Arbitrage ────────────────────────────────────────────
+  mode_b_enabled: true
+  mode_b_triangles:
+    - ["BTCUSDT", "ETHBTC", "ETHUSDT"]      # USDT→BTC→ETH→USDT
+    - ["BTCUSDT", "SOLBTC", "SOLUSDT"]      # USDT→BTC→SOL→USDT
+    - ["ETHUSDT", "BNBETH", "BNBUSDT"]      # USDT→ETH→BNB→USDT
+    - ["BTCUSDT", "XRPBTC", "XRPUSDT"]     # USDT→BTC→XRP→USDT
+    - ["BTCUSDT", "DOGEBTC", "DOGEUSDT"]    # USDT→BTC→DOGE→USDT
+    - ["BTCUSDT", "ADABTC", "ADAUSDT"]      # USDT→BTC→ADA→USDT
+    - ["ETHUSDT", "SOLETH", "SOLUSDT"]      # USDT→ETH→SOL→USDT
+    - ["BTCUSDT", "BNBBTC", "BNBUSDT"]     # USDT→BTC→BNB→USDT
+    - ["ETHUSDT", "XRPETH", "XRPUSDT"]     # USDT→ETH→XRP→USDT
+    - ["ETHUSDT", "ADAETH", "ADAUSDT"]      # USDT→ETH→ADA→USDT
+
+  mode_b_min_gross_profit_pct: 0.35   # Must exceed ~3× taker fees
+  mode_b_max_per_leg_pct: 1.0         # % of equity per leg
+  mode_b_max_execution_ms: 500        # Total 3-leg execution window
+
+  # ── Fee configuration ───────────────────────────────────────────────────────
+  spot_taker_fee_pct: 0.10            # Default spot taker fee %
+  futures_taker_fee_pct: 0.04         # Default futures taker fee %
+  bnb_fee_discount_pct: 25.0          # BNB discount on fees
+  min_bnb_balance: 0.5                # Min BNB to qualify for discount
+
+  # ── Execution parameters ────────────────────────────────────────────────────
+  mode_a_max_execution_ms: 50         # Both legs within 50ms
+  max_retries: 3                      # Retries on leg failure
+  retry_delay_ms: 200                 # Delay between retries
+  max_unhedged_time_s: 60             # Hard limit on unhedged exposure
+  counter_opportunity_wait_s: 30      # Wait for counter-opp before market close
+
+  # ── Depth / liquidity ──────────────────────────────────────────────────────
+  depth_multiplier: 1.5               # Required depth = order_size × 1.5
+  min_profit_usdt: 0.50               # Minimum $0.50 net per trade
+
+  # ── Opportunity aging ──────────────────────────────────────────────────────
+  opportunity_max_age_s: 1.0          # Discard if > 1 second old
+
+  # ── Price anomaly detection ────────────────────────────────────────────────
+  anomaly_deviation_pct: 2.0          # Skip if >2% deviation
+  anomaly_confirmations: 3            # Wait for 3 confirmations
+
+  # ── Latency filter ────────────────────────────────────────────────────────
+  latency_check_interval_s: 60        # Measure latency every 60s
+  latency_reduce_ms: 200              # Reduce activity above this
+  latency_halt_ms: 500                # Halt completely above this
+
+  # ── Volatility filter ─────────────────────────────────────────────────────
+  high_volatility_btc_move_pct: 5.0   # BTC >5% in 15m
+  high_volatility_threshold_mult: 2.0 # Double threshold in high vol
+
+  # ── Wallet rebalancing ────────────────────────────────────────────────────
+  wallet_rebalance_interval_h: 4      # Check every 4 hours
+  wallet_deviation_threshold_pct: 10.0 # Rebalance if >10% deviation from 50/50
+  spot_wallet_target_pct: 50.0
+  futures_wallet_target_pct: 50.0
+
+  # ── Maintenance ────────────────────────────────────────────────────────────
+  maintenance_halt_hours_before: 2    # Halt 2h before scheduled maintenance
+
+  # ── Consecutive loss handling ──────────────────────────────────────────────
+  consecutive_negative_halt: 5        # Halt after 5 consecutive negative arbs
+  one_leg_fail_halt_count: 3          # Halt after 3 consecutive one-leg fails
+  one_leg_fail_halt_minutes: 30       # Halt duration
+  daily_loss_halt: 10                 # Halt for day after 10 negative
+  consecutive_losing_days_halt: 3     # Halt and require manual review
+
+  # ── EOD Reconciliation ────────────────────────────────────────────────────
+  eod_reconciliation_hour_utc: 0      # 00:00 UTC
+  eod_reconciliation_minute_utc: 0
+
+  # ── Weekly threshold recalibration ────────────────────────────────────────
+  recalibration_day: "monday"
+  recalibration_hour_utc: 1
+
+  # ── Paper trading simulation ──────────────────────────────────────────────
+  paper_latency_min_ms: 50
+  paper_latency_max_ms: 200
+  paper_mode_b_leg_delay_min_ms: 100
+  paper_mode_b_leg_delay_max_ms: 200
+
+  # ── Max concurrent arb executions ─────────────────────────────────────────
+  max_concurrent_arbs: 2

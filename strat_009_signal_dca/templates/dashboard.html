@@ -1,0 +1,389 @@
+{% extends "base.html" %}
+
+{% block title %}{{ strategy_name }} — Signal-Enhanced DCA Dashboard{% endblock %}
+
+{% block nav_items %}
+<a href="#overview" class="nav-link active">Overview</a>
+<a href="#signals" class="nav-link">Signals</a>
+<a href="#portfolio" class="nav-link">Portfolio</a>
+<a href="#budget" class="nav-link">Budget</a>
+<a href="#history" class="nav-link">History</a>
+{% endblock %}
+
+{% block content %}
+<!-- Mode Banner -->
+<div id="mode-banner" class="card" style="background: {% if mode == 'paper' %}var(--yellow){% else %}var(--green){% endif %}; color: #000; padding: 8px 16px; margin-bottom: 16px; border-radius: 6px; font-weight: 600;">
+    {% if mode == 'paper' %}PAPER TRADING MODE{% else %}LIVE TRADING{% endif %}
+    &mdash; {{ strategy_name }} ({{ strategy_id }})
+    | Uptime: <span id="uptime">{{ uptime }}</span>
+    | Memory: <span id="memory">{{ memory_mb }}</span> MB
+</div>
+
+<!-- Overview Section -->
+<section id="overview">
+    <div class="grid grid-4">
+        <!-- Portfolio Value -->
+        <div class="card">
+            <div class="card-label">Portfolio Value</div>
+            <div class="card-value" id="portfolio-value">
+                $<span>{{ "%.2f"|format(metrics.get('portfolio_value', 0)) }}</span>
+            </div>
+            <div class="card-sub {% if metrics.get('total_return_pct', 0) >= 0 %}text-green{% else %}text-red{% endif %}" id="total-return">
+                {{ "%.2f"|format(metrics.get('total_return_pct', 0)) }}% return
+            </div>
+        </div>
+
+        <!-- Total Invested -->
+        <div class="card">
+            <div class="card-label">Total Invested</div>
+            <div class="card-value" id="total-invested">
+                $<span>{{ "%.2f"|format(metrics.get('total_invested', 0)) }}</span>
+            </div>
+            <div class="card-sub">{{ metrics.get('total_purchases', 0) }} purchases</div>
+        </div>
+
+        <!-- Next DCA Countdown -->
+        <div class="card">
+            <div class="card-label">Next DCA</div>
+            <div class="card-value" id="countdown" style="font-size: 1.4em;">
+                Loading...
+            </div>
+            <div class="card-sub" id="next-dca-time">--</div>
+        </div>
+
+        <!-- Signal Multiplier -->
+        <div class="card">
+            <div class="card-label">Signal Multiplier (Avg)</div>
+            <div class="card-value" id="avg-multiplier">
+                {% set mult = metrics.get('multiplier_distribution', {}).get('mean', 1.0) %}
+                {{ "%.3f"|format(mult) }}x
+            </div>
+            <div class="card-sub">
+                Signal vs Vanilla: <span id="signal-improvement">{{ "%.2f"|format(metrics.get('signal_vs_vanilla_improvement', 0)) }}%</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Signals Section -->
+<section id="signals" style="margin-top: 24px;">
+    <h2 class="section-title">Current Signals</h2>
+    <div class="grid grid-2">
+        {% for symbol, sig in metrics.get('current_signals', {}).items() %}
+        <div class="card">
+            <div class="card-label">{{ symbol }}</div>
+            <table class="data-table" style="width: 100%;">
+                <tr>
+                    <td>RSI(14)</td>
+                    <td class="{% if sig.get('rsi_value', 50) < 35 %}text-green{% elif sig.get('rsi_value', 50) > 65 %}text-red{% endif %}">
+                        {{ "%.1f"|format(sig.get('rsi_value', 50)) }}
+                    </td>
+                    <td>{{ "%.3f"|format(sig.get('rsi_multiplier', 1.0)) }}x</td>
+                </tr>
+                <tr>
+                    <td>Fear &amp; Greed</td>
+                    <td class="{% if sig.get('fg_value', 50) < 35 %}text-green{% elif sig.get('fg_value', 50) > 65 %}text-red{% endif %}">
+                        {{ sig.get('fg_value', 50) }}
+                    </td>
+                    <td>{{ "%.3f"|format(sig.get('fg_multiplier', 1.0)) }}x</td>
+                </tr>
+                <tr>
+                    <td>Price/SMA200</td>
+                    <td class="{% if sig.get('sma_ratio', 1.0) < 1.0 %}text-green{% elif sig.get('sma_ratio', 1.0) > 1.2 %}text-red{% endif %}">
+                        {{ "%.3f"|format(sig.get('sma_ratio', 1.0)) }}
+                    </td>
+                    <td>{{ "%.3f"|format(sig.get('sma_multiplier', 1.0)) }}x</td>
+                </tr>
+                {% if sig.get('sopr_value') is not none %}
+                <tr>
+                    <td>SOPR</td>
+                    <td>{{ "%.3f"|format(sig.get('sopr_value', 1.0)) }}</td>
+                    <td>{{ "%.3f"|format(sig.get('sopr_multiplier', 1.0)) }}x</td>
+                </tr>
+                {% endif %}
+                <tr style="border-top: 1px solid var(--border); font-weight: bold;">
+                    <td>Final Multiplier</td>
+                    <td colspan="2" class="{% if sig.get('final_multiplier', 1.0) > 1.2 %}text-green{% elif sig.get('final_multiplier', 1.0) < 0.8 %}text-red{% endif %}">
+                        {{ "%.3f"|format(sig.get('final_multiplier', 1.0)) }}x
+                    </td>
+                </tr>
+            </table>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+<!-- Portfolio Section -->
+<section id="portfolio" style="margin-top: 24px;">
+    <h2 class="section-title">Portfolio Holdings</h2>
+    <div class="card">
+        <table class="data-table" style="width: 100%;">
+            <thead>
+                <tr>
+                    <th>Asset</th>
+                    <th>Quantity</th>
+                    <th>Avg Cost</th>
+                    <th>Current Price</th>
+                    <th>Value</th>
+                    <th>Invested</th>
+                    <th>PnL</th>
+                    <th>Return</th>
+                    <th>Allocation</th>
+                </tr>
+            </thead>
+            <tbody id="holdings-table">
+                {% for sym, h in metrics.get('holdings', {}).items() %}
+                <tr>
+                    <td><strong>{{ sym }}</strong></td>
+                    <td>{{ "%.6f"|format(h.get('quantity', 0)) }}</td>
+                    <td>${{ "%.2f"|format(h.get('avg_cost_basis', 0)) }}</td>
+                    <td>${{ "%.2f"|format(h.get('current_price', 0)) }}</td>
+                    <td>${{ "%.2f"|format(h.get('current_value', 0)) }}</td>
+                    <td>${{ "%.2f"|format(h.get('total_invested', 0)) }}</td>
+                    <td class="{% if h.get('unrealised_pnl', 0) >= 0 %}text-green{% else %}text-red{% endif %}">
+                        ${{ "%.2f"|format(h.get('unrealised_pnl', 0)) }}
+                    </td>
+                    <td class="{% if h.get('unrealised_pnl_pct', 0) >= 0 %}text-green{% else %}text-red{% endif %}">
+                        {{ "%.2f"|format(h.get('unrealised_pnl_pct', 0)) }}%
+                    </td>
+                    <td>{{ metrics.get('asset_allocation', {}).get(sym, 0) }}%</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Crash-Buy Cooldowns -->
+    <h3 style="margin-top: 16px; color: var(--text-muted);">Crash-Buy Cooldowns</h3>
+    <div class="grid grid-2" id="crash-cooldowns">
+        <div class="card">
+            <div class="card-label">Crash cooldown data loads via WebSocket</div>
+        </div>
+    </div>
+</section>
+
+<!-- Budget Section -->
+<section id="budget" style="margin-top: 24px;">
+    <h2 class="section-title">Monthly Budget</h2>
+    <div class="grid grid-3">
+        <div class="card">
+            <div class="card-label">DCA Budget</div>
+            <div class="card-value" id="dca-budget">--</div>
+            <div class="card-sub" id="dca-remaining">Loading...</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Crash Reserve</div>
+            <div class="card-value" id="crash-budget">--</div>
+            <div class="card-sub" id="crash-remaining">Loading...</div>
+        </div>
+        <div class="card">
+            <div class="card-label">Budget Utilisation</div>
+            <div class="card-value" id="budget-util">--</div>
+            <div class="progress-bar" style="margin-top: 8px;">
+                <div class="progress-fill" id="budget-bar" style="width: 0%;"></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- History Section -->
+<section id="history" style="margin-top: 24px;">
+    <h2 class="section-title">Recent Purchases</h2>
+    <div class="card">
+        <table class="data-table" style="width: 100%;">
+            <thead>
+                <tr>
+                    <th>Time (UTC)</th>
+                    <th>Symbol</th>
+                    <th>Type</th>
+                    <th>Amount</th>
+                    <th>Qty</th>
+                    <th>Price</th>
+                    <th>Multiplier</th>
+                    <th>RSI</th>
+                    <th>F&amp;G</th>
+                </tr>
+            </thead>
+            <tbody id="purchase-history">
+                {% for t in trades %}
+                <tr>
+                    <td>{{ t.get('timestamp_utc', '')[:19] }}</td>
+                    <td>{{ t.get('symbol', '') }}</td>
+                    <td>
+                        {% if t.get('is_crash_buy') %}
+                        <span class="badge badge-red">CRASH L{{ t.get('crash_level', 0) }}</span>
+                        {% else %}
+                        <span class="badge badge-blue">DCA</span>
+                        {% endif %}
+                        {% if t.get('is_paper') %}<span class="badge badge-yellow">PAPER</span>{% endif %}
+                    </td>
+                    <td>${{ "%.2f"|format(t.get('amount_usdt', 0)) }}</td>
+                    <td>{{ "%.6f"|format(t.get('quantity', 0)) }}</td>
+                    <td>${{ "%.2f"|format(t.get('price', 0)) }}</td>
+                    <td>{{ "%.3f"|format(t.get('multiplier', 1.0)) }}x</td>
+                    <td>{{ "%.1f"|format(t.get('rsi', 50)) }}</td>
+                    <td>{{ t.get('fear_greed', 50) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<!-- Performance Metrics -->
+<section id="performance" style="margin-top: 24px;">
+    <h2 class="section-title">Performance Comparison</h2>
+    <div class="grid grid-3">
+        <div class="card">
+            <div class="card-label">Signal-Enhanced Return</div>
+            <div class="card-value {% if metrics.get('total_return_pct', 0) >= 0 %}text-green{% else %}text-red{% endif %}">
+                {{ "%.2f"|format(metrics.get('total_return_pct', 0)) }}%
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-label">Vanilla DCA Return</div>
+            <div class="card-value {% if metrics.get('vanilla_dca_return_pct', 0) >= 0 %}text-green{% else %}text-red{% endif %}">
+                {{ "%.2f"|format(metrics.get('vanilla_dca_return_pct', 0)) }}%
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-label">Signal Improvement</div>
+            <div class="card-value {% if metrics.get('signal_vs_vanilla_improvement', 0) >= 0 %}text-green{% else %}text-red{% endif %}">
+                {{ "%.2f"|format(metrics.get('signal_vs_vanilla_improvement', 0)) }}%
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-2" style="margin-top: 12px;">
+        <div class="card">
+            <div class="card-label">Crash-Buy Performance</div>
+            <table class="data-table" style="width: 100%;">
+                <tr><td>Total Crash Buys</td><td>{{ metrics.get('crash_buy_performance', {}).get('count', 0) }}</td></tr>
+                <tr><td>Invested</td><td>${{ "%.2f"|format(metrics.get('crash_buy_performance', {}).get('total_invested', 0)) }}</td></tr>
+                <tr><td>Current Value</td><td>${{ "%.2f"|format(metrics.get('crash_buy_performance', {}).get('current_value', 0)) }}</td></tr>
+                <tr>
+                    <td>Return</td>
+                    <td class="{% if metrics.get('crash_buy_performance', {}).get('return_pct', 0) >= 0 %}text-green{% else %}text-red{% endif %}">
+                        {{ "%.2f"|format(metrics.get('crash_buy_performance', {}).get('return_pct', 0)) }}%
+                    </td>
+                </tr>
+            </table>
+        </div>
+        <div class="card">
+            <div class="card-label">Multiplier Distribution</div>
+            <table class="data-table" style="width: 100%;">
+                {% set md = metrics.get('multiplier_distribution', {}) %}
+                <tr><td>Mean</td><td>{{ "%.3f"|format(md.get('mean', 0)) }}x</td></tr>
+                <tr><td>Median</td><td>{{ "%.3f"|format(md.get('median', 0)) }}x</td></tr>
+                <tr><td>Min</td><td>{{ "%.3f"|format(md.get('min', 0)) }}x</td></tr>
+                <tr><td>Max</td><td>{{ "%.3f"|format(md.get('max', 0)) }}x</td></tr>
+                <tr><td>Total Samples</td><td>{{ md.get('count', 0) }}</td></tr>
+            </table>
+        </div>
+    </div>
+</section>
+
+<style>
+.grid { display: grid; gap: 12px; }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-4 { grid-template-columns: repeat(4, 1fr); }
+.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 16px; }
+.card-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+.card-value { font-size: 1.8em; font-weight: bold; color: var(--text-bright); font-family: var(--mono); }
+.card-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.section-title { font-size: 16px; color: var(--text-bright); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.data-table { border-collapse: collapse; font-size: 13px; }
+.data-table th, .data-table td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+.data-table th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; }
+.text-green { color: var(--green); }
+.text-red { color: var(--red); }
+.badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; }
+.badge-blue { background: var(--blue); color: #fff; }
+.badge-red { background: var(--red); color: #fff; }
+.badge-yellow { background: var(--yellow); color: #000; }
+.progress-bar { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--blue); border-radius: 4px; transition: width 0.3s; }
+@media (max-width: 800px) {
+    .grid-4, .grid-3 { grid-template-columns: repeat(2, 1fr); }
+    .grid-2 { grid-template-columns: 1fr; }
+}
+</style>
+
+<script>
+// WebSocket for live updates
+const wsUrl = "{{ ws_url }}";
+let ws = null;
+let reconnectInterval = 2000;
+
+function connectWS() {
+    ws = new WebSocket(wsUrl);
+    ws.onopen = function() {
+        console.log("WS connected");
+        reconnectInterval = 2000;
+    };
+    ws.onmessage = function(evt) {
+        try {
+            const data = JSON.parse(evt.data);
+            if (data.type === "update") updateDashboard(data);
+        } catch(e) { console.error("WS parse error", e); }
+    };
+    ws.onclose = function() {
+        console.log("WS closed, reconnecting in " + reconnectInterval + "ms");
+        setTimeout(connectWS, reconnectInterval);
+        reconnectInterval = Math.min(reconnectInterval * 1.5, 30000);
+    };
+}
+
+function updateDashboard(data) {
+    // Uptime and memory
+    if (data.uptime) document.getElementById("uptime").textContent = data.uptime;
+    if (data.memory_mb) document.getElementById("memory").textContent = data.memory_mb;
+
+    // Budget
+    const budget = data.budget || {};
+    if (budget.dca_budget !== undefined) {
+        document.getElementById("dca-budget").textContent = "$" + budget.dca_spent.toFixed(2) + " / $" + budget.dca_budget.toFixed(2);
+        document.getElementById("dca-remaining").textContent = "$" + budget.dca_remaining.toFixed(2) + " remaining";
+        document.getElementById("crash-budget").textContent = "$" + budget.crash_spent.toFixed(2) + " / $" + budget.crash_reserve.toFixed(2);
+        document.getElementById("crash-remaining").textContent = "$" + budget.crash_remaining.toFixed(2) + " remaining";
+        document.getElementById("budget-util").textContent = budget.utilisation_pct.toFixed(1) + "%";
+        document.getElementById("budget-bar").style.width = Math.min(budget.utilisation_pct, 100) + "%";
+    }
+
+    // Countdown
+    const cd = data.countdown || {};
+    if (cd.countdown) {
+        document.getElementById("countdown").textContent = cd.countdown;
+        if (cd.next_dca_utc) {
+            document.getElementById("next-dca-time").textContent = cd.next_dca_utc.replace("T", " ").substring(0, 19) + " UTC";
+        }
+    }
+
+    // Metrics
+    const m = data.metrics || {};
+    if (m.portfolio_value !== undefined) {
+        document.querySelector("#portfolio-value span").textContent = m.portfolio_value.toFixed(2);
+    }
+    if (m.total_return_pct !== undefined) {
+        const retEl = document.getElementById("total-return");
+        retEl.textContent = m.total_return_pct.toFixed(2) + "% return";
+        retEl.className = "card-sub " + (m.total_return_pct >= 0 ? "text-green" : "text-red");
+    }
+}
+
+// Countdown timer
+setInterval(function() {
+    fetch("/api/countdown")
+        .then(r => r.json())
+        .then(data => {
+            if (data.countdown) {
+                document.getElementById("countdown").textContent = data.countdown;
+            }
+        })
+        .catch(() => {});
+}, 10000);
+
+connectWS();
+</script>
+{% endblock %}

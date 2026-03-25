@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ strategy_name }} Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #0a0e17; color: #e0e0e0; }
+        .header { background: #131a2a; padding: 15px 25px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e2a3a; }
+        .header h1 { font-size: 1.3em; color: #4ecdc4; }
+        .header .meta { font-size: 0.85em; color: #8899aa; }
+        .mode-badge { padding: 3px 10px; border-radius: 12px; font-size: 0.75em; font-weight: bold; }
+        .mode-paper { background: #f39c12; color: #000; }
+        .mode-live { background: #e74c3c; color: #fff; }
+        .container { padding: 15px 25px; }
+        .grid { display: grid; gap: 15px; }
+        .grid-2 { grid-template-columns: 1fr 1fr; }
+        .grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+        .grid-4 { grid-template-columns: repeat(4, 1fr); }
+        .card { background: #131a2a; border-radius: 8px; padding: 15px; border: 1px solid #1e2a3a; }
+        .card h3 { color: #4ecdc4; font-size: 0.9em; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }
+        .stat { text-align: center; padding: 8px; }
+        .stat .value { font-size: 1.8em; font-weight: bold; }
+        .stat .label { font-size: 0.75em; color: #8899aa; margin-top: 3px; }
+        .positive { color: #2ecc71; }
+        .negative { color: #e74c3c; }
+        .neutral { color: #f39c12; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+        th { background: #0d1320; color: #4ecdc4; padding: 8px 10px; text-align: left; font-weight: 600; }
+        td { padding: 7px 10px; border-bottom: 1px solid #1a2235; }
+        tr:hover { background: #151e30; }
+        .z-gauge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 6px; margin: 3px; }
+        .z-gauge .z-val { font-size: 1.2em; font-weight: bold; font-family: monospace; }
+        .z-gauge .z-pair { font-size: 0.8em; color: #8899aa; }
+        .zone-neutral { background: #1a2235; border: 1px solid #2a3a4a; }
+        .zone-watch { background: #2c3e1e; border: 1px solid #4a6a2a; }
+        .zone-active { background: #3e2c1e; border: 1px solid #6a4a2a; }
+        .zone-danger { background: #3e1e1e; border: 1px solid #6a2a2a; }
+        .alert { padding: 6px 10px; margin: 3px 0; border-radius: 4px; font-size: 0.8em; }
+        .alert-info { background: #1a2a3a; border-left: 3px solid #3498db; }
+        .alert-warning { background: #2a2a1a; border-left: 3px solid #f39c12; }
+        .alert-critical { background: #2a1a1a; border-left: 3px solid #e74c3c; }
+        .bar { height: 6px; background: #1a2235; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+        .bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+        .bar-green { background: linear-gradient(90deg, #27ae60, #2ecc71); }
+        .bar-yellow { background: linear-gradient(90deg, #f39c12, #e67e22); }
+        .bar-red { background: linear-gradient(90deg, #e74c3c, #c0392b); }
+        .spread-chart { width: 100%; height: 120px; background: #0d1320; border-radius: 4px; position: relative; overflow: hidden; }
+        .spread-line { stroke: #4ecdc4; stroke-width: 1.5; fill: none; }
+        .zero-line { stroke: #3a4a5a; stroke-width: 0.5; stroke-dasharray: 4 4; }
+        .kill-btn { background: #e74c3c; color: #fff; border: none; padding: 8px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .kill-btn:hover { background: #c0392b; }
+        @media (max-width: 1200px) { .grid-4 { grid-template-columns: 1fr 1fr; } .grid-3 { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 768px) { .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>{{ strategy_name }}</h1>
+            <span class="meta">{{ strategy_id }} | Uptime: <span id="uptime">{{ uptime }}</span> | Memory: <span id="memory">{{ memory_mb }}</span> MB</span>
+        </div>
+        <div>
+            <span class="mode-badge mode-{{ mode }}">{{ mode|upper }}</span>
+            <button class="kill-btn" onclick="killSwitch()">KILL SWITCH</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Key Metrics Row -->
+        <div class="grid grid-4" style="margin-bottom:15px">
+            <div class="card stat">
+                <div class="value" id="total-pnl">--</div>
+                <div class="label">Total PnL (USDT)</div>
+            </div>
+            <div class="card stat">
+                <div class="value" id="active-pairs">--</div>
+                <div class="label">Active Pairs</div>
+            </div>
+            <div class="card stat">
+                <div class="value" id="win-rate">--</div>
+                <div class="label">Win Rate</div>
+            </div>
+            <div class="card stat">
+                <div class="value" id="sharpe">--</div>
+                <div class="label">Sharpe Ratio</div>
+            </div>
+        </div>
+
+        <!-- Z-Score Gauges -->
+        <div class="card" style="margin-bottom:15px">
+            <h3>Z-Score Gauges</h3>
+            <div id="z-gauges" style="display:flex;flex-wrap:wrap;gap:5px">
+                <span class="z-gauge zone-neutral"><span class="z-pair">Loading...</span></span>
+            </div>
+        </div>
+
+        <div class="grid grid-2" style="margin-bottom:15px">
+            <!-- Open Positions -->
+            <div class="card">
+                <h3>Open Pair Positions</h3>
+                <div style="overflow-x:auto">
+                    <table id="positions-table">
+                        <thead>
+                            <tr><th>Pair</th><th>Direction</th><th>Entry Z</th><th>Current Z</th><th>PnL</th><th>Duration</th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Exposure -->
+            <div class="card">
+                <h3>Exposure Summary</h3>
+                <div id="exposure-summary">
+                    <div class="stat"><div class="value" id="exp-long">--</div><div class="label">Long Exposure</div></div>
+                    <div class="stat"><div class="value" id="exp-short">--</div><div class="label">Short Exposure</div></div>
+                    <div class="stat"><div class="value" id="exp-net">--</div><div class="label">Net Directional</div></div>
+                </div>
+                <div style="margin-top:10px">
+                    <div class="label" style="color:#8899aa">Long %</div>
+                    <div class="bar"><div class="bar-fill bar-green" id="bar-long" style="width:0%"></div></div>
+                    <div class="label" style="color:#8899aa;margin-top:6px">Short %</div>
+                    <div class="bar"><div class="bar-fill bar-red" id="bar-short" style="width:0%"></div></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-2" style="margin-bottom:15px">
+            <!-- Cointegration Results -->
+            <div class="card">
+                <h3>Cointegration Test Results</h3>
+                <div style="overflow-x:auto;max-height:350px;overflow-y:auto">
+                    <table id="coint-table">
+                        <thead>
+                            <tr><th>Pair</th><th>Beta</th><th>ADF p</th><th>HL (d)</th><th>Hurst</th><th>Corr Stab</th><th>Score</th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Pair PnL Attribution -->
+            <div class="card">
+                <h3>Pair-Level PnL</h3>
+                <div style="overflow-x:auto;max-height:350px;overflow-y:auto">
+                    <table id="pair-pnl-table">
+                        <thead>
+                            <tr><th>Pair</th><th>PnL</th><th>Trades</th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-2">
+            <!-- Recent Trades -->
+            <div class="card">
+                <h3>Recent Trades</h3>
+                <div style="overflow-x:auto;max-height:300px;overflow-y:auto">
+                    <table id="trades-table">
+                        <thead>
+                            <tr><th>Pair</th><th>Direction</th><th>Entry Z</th><th>Exit Z</th><th>PnL</th><th>Reason</th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Alerts -->
+            <div class="card">
+                <h3>Alerts</h3>
+                <div id="alerts-container" style="max-height:300px;overflow-y:auto"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const wsUrl = "{{ ws_url }}";
+        let ws;
+
+        function connectWS() {
+            ws = new WebSocket(wsUrl);
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.type === 'update') updateDashboard(data);
+            };
+            ws.onclose = function() { setTimeout(connectWS, 3000); };
+            ws.onerror = function() { ws.close(); };
+        }
+
+        function updateDashboard(data) {
+            document.getElementById('uptime').textContent = data.uptime || '--';
+            document.getElementById('memory').textContent = data.memory_mb || '--';
+
+            const m = data.metrics || {};
+            const pnl = m.total_pnl || 0;
+            const pnlEl = document.getElementById('total-pnl');
+            pnlEl.textContent = pnl.toFixed(2);
+            pnlEl.className = 'value ' + (pnl >= 0 ? 'positive' : 'negative');
+
+            document.getElementById('active-pairs').textContent = data.positions_count || 0;
+            const wr = m.win_rate || 0;
+            const wrEl = document.getElementById('win-rate');
+            wrEl.textContent = (wr * 100).toFixed(1) + '%';
+            wrEl.className = 'value ' + (wr >= 0.5 ? 'positive' : 'negative');
+
+            const sr = m.sharpe_ratio ? (m.sharpe_ratio.all_time || 0) : 0;
+            const srEl = document.getElementById('sharpe');
+            srEl.textContent = sr.toFixed(2);
+            srEl.className = 'value ' + (sr >= 1.0 ? 'positive' : sr >= 0 ? 'neutral' : 'negative');
+
+            updatePositions(data.positions || []);
+            updateAlerts(data.alerts || []);
+        }
+
+        function updatePositions(positions) {
+            const tbody = document.querySelector('#positions-table tbody');
+            tbody.innerHTML = '';
+            positions.forEach(p => {
+                const pnlClass = p.pnl >= 0 ? 'positive' : 'negative';
+                tbody.innerHTML += '<tr>' +
+                    '<td>' + p.asset_a + '/' + p.asset_b + '</td>' +
+                    '<td>' + p.direction + '</td>' +
+                    '<td>' + p.entry_z.toFixed(3) + '</td>' +
+                    '<td>' + p.current_z.toFixed(3) + '</td>' +
+                    '<td class="' + pnlClass + '">' + p.pnl.toFixed(2) + '</td>' +
+                    '<td>' + p.duration_h.toFixed(1) + 'h</td></tr>';
+            });
+        }
+
+        function updateAlerts(alerts) {
+            const container = document.getElementById('alerts-container');
+            container.innerHTML = '';
+            alerts.slice(-20).reverse().forEach(a => {
+                const cls = 'alert alert-' + (a.level || 'info');
+                const ts = new Date(a.timestamp * 1000).toLocaleTimeString();
+                container.innerHTML += '<div class="' + cls + '">[' + ts + '] ' + a.message + '</div>';
+            });
+        }
+
+        async function fetchCointegration() {
+            try {
+                const r = await fetch('/api/cointegration');
+                const pairs = await r.json();
+                const tbody = document.querySelector('#coint-table tbody');
+                tbody.innerHTML = '';
+                pairs.forEach(p => {
+                    const pClass = p.adf_p_value < 0.01 ? 'positive' : (p.adf_p_value < 0.05 ? 'neutral' : 'negative');
+                    const hClass = p.hurst_exponent < 0.4 ? 'positive' : 'neutral';
+                    tbody.innerHTML += '<tr>' +
+                        '<td>' + p.asset_a + '/' + p.asset_b + '</td>' +
+                        '<td>' + p.hedge_ratio.toFixed(4) + '</td>' +
+                        '<td class="' + pClass + '">' + p.adf_p_value.toFixed(4) + '</td>' +
+                        '<td>' + p.half_life_days.toFixed(1) + '</td>' +
+                        '<td class="' + hClass + '">' + p.hurst_exponent.toFixed(3) + '</td>' +
+                        '<td>' + p.correlation_stability.toFixed(0) + '%</td>' +
+                        '<td>' + p.rank_score.toFixed(1) + '</td></tr>';
+                });
+            } catch(e) { console.error('Failed to fetch cointegration data:', e); }
+        }
+
+        async function fetchZScores() {
+            try {
+                const r = await fetch('/api/z-scores');
+                const gauges = await r.json();
+                const container = document.getElementById('z-gauges');
+                container.innerHTML = '';
+                gauges.forEach(g => {
+                    const cls = 'z-gauge zone-' + g.zone;
+                    const zClass = g.z_score >= 0 ? (g.z_score > 2 ? 'negative' : 'neutral') : (g.z_score < -2 ? 'positive' : 'neutral');
+                    container.innerHTML += '<span class="' + cls + '">' +
+                        '<span class="z-pair">' + g.asset_a + '/' + g.asset_b + '</span>' +
+                        '<span class="z-val ' + zClass + '">' + g.z_score.toFixed(2) + '</span></span>';
+                });
+            } catch(e) { console.error('Failed to fetch Z-scores:', e); }
+        }
+
+        async function fetchExposure() {
+            try {
+                const r = await fetch('/api/exposure');
+                const exp = await r.json();
+                document.getElementById('exp-long').textContent = (exp.long_pct || 0).toFixed(1) + '%';
+                document.getElementById('exp-short').textContent = (exp.short_pct || 0).toFixed(1) + '%';
+                const netEl = document.getElementById('exp-net');
+                netEl.textContent = (exp.net_pct || 0).toFixed(1) + '%';
+                netEl.className = 'value ' + (Math.abs(exp.net_pct || 0) < 3 ? 'positive' : 'neutral');
+                document.getElementById('bar-long').style.width = Math.min(exp.long_pct || 0, 100) / 15 * 100 + '%';
+                document.getElementById('bar-short').style.width = Math.min(exp.short_pct || 0, 100) / 15 * 100 + '%';
+            } catch(e) {}
+        }
+
+        async function fetchPairPnL() {
+            try {
+                const r = await fetch('/api/pair-pnl');
+                const pnl = await r.json();
+                const tbody = document.querySelector('#pair-pnl-table tbody');
+                tbody.innerHTML = '';
+                Object.entries(pnl).forEach(([pair, data]) => {
+                    const cls = data.pnl >= 0 ? 'positive' : 'negative';
+                    tbody.innerHTML += '<tr><td>' + pair + '</td>' +
+                        '<td class="' + cls + '">' + data.pnl.toFixed(2) + '</td>' +
+                        '<td>' + data.trades + '</td></tr>';
+                });
+            } catch(e) {}
+        }
+
+        async function fetchTrades() {
+            try {
+                const r = await fetch('/api/trades?limit=20');
+                const trades = await r.json();
+                const tbody = document.querySelector('#trades-table tbody');
+                tbody.innerHTML = '';
+                trades.forEach(t => {
+                    const cls = (t.pnl || 0) >= 0 ? 'positive' : 'negative';
+                    tbody.innerHTML += '<tr>' +
+                        '<td>' + (t.symbol || '') + '</td>' +
+                        '<td>' + (t.side || '') + '</td>' +
+                        '<td>' + (t.entry_z || 0).toFixed(2) + '</td>' +
+                        '<td>' + (t.exit_z || 0).toFixed(2) + '</td>' +
+                        '<td class="' + cls + '">' + (t.pnl || 0).toFixed(2) + '</td>' +
+                        '<td>' + (t.exit_reason || '') + '</td></tr>';
+                });
+            } catch(e) {}
+        }
+
+        function killSwitch() {
+            if (confirm('DANGER: This will close ALL positions immediately. Continue?')) {
+                fetch('/kill', { method: 'POST', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({reason: 'Dashboard kill switch'})
+                }).then(r => r.json()).then(d => alert('Kill switch result: ' + JSON.stringify(d)));
+            }
+        }
+
+        // Initial load and periodic refresh
+        connectWS();
+        fetchCointegration();
+        fetchZScores();
+        fetchExposure();
+        fetchPairPnL();
+        fetchTrades();
+
+        setInterval(fetchZScores, 5000);
+        setInterval(fetchExposure, 10000);
+        setInterval(fetchPairPnL, 30000);
+        setInterval(fetchTrades, 15000);
+        setInterval(fetchCointegration, 60000);
+    </script>
+</body>
+</html>

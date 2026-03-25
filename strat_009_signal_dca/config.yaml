@@ -1,0 +1,190 @@
+# =============================================================================
+# STRAT-009 Signal-Enhanced DCA Bot Configuration
+# =============================================================================
+
+strategy_id: "STRAT-009"
+strategy_name: "Signal-Enhanced DCA"
+mode: "paper"  # "paper" or "live"
+
+instruments:
+  - "BTCUSDT"
+  - "ETHUSDT"
+  # - "SOLUSDT"
+  # - "BNBUSDT"
+
+# --- Binance API ---
+binance:
+  api_key: ""
+  api_secret: ""
+  testnet: false
+  spot_base_url: "https://api.binance.com"
+  spot_ws_url: "wss://stream.binance.com:9443"
+  recv_window: 5000
+
+# --- Risk Management ---
+risk:
+  max_capital_pct: 30.0        # Max 30% of total account equity
+  max_per_trade_pct: 10.0      # Single purchase can be up to 10% of equity
+  max_leverage: 1              # SPOT only, no leverage
+  max_concurrent_positions: 4
+  max_per_asset_pct: 60.0      # No single asset > 60% of DCA portfolio
+  max_long_exposure_pct: 100.0 # DCA is long-only
+  max_short_exposure_pct: 0.0  # Never short
+  max_net_directional_pct: 100.0
+  daily_drawdown_pct: 100.0    # DCA does not use daily drawdown stops
+  weekly_drawdown_pct: 100.0
+  monthly_drawdown_pct: 100.0
+  system_wide_drawdown_pct: 100.0
+
+# --- Paper Trading ---
+paper_trading:
+  enabled: true
+  starting_equity: 10000.0
+  maker_fee_pct: 0.10
+  taker_fee_pct: 0.10
+  slippage_model: "fixed"
+
+# --- Dashboard ---
+dashboard:
+  host: "0.0.0.0"
+  port: 8080
+  enable_kill_switch: true
+
+# --- Alerting ---
+alerting:
+  enabled: false
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  discord_webhook_url: ""
+
+# --- Database ---
+database:
+  url: "sqlite:///data/bot.db"
+  echo: false
+
+# --- Logging ---
+logging:
+  level: "INFO"
+  log_dir: "data/logs"
+  rotate_days: 30
+  trade_log_permanent: true
+
+# --- State Persistence ---
+state:
+  persistence_interval: 30.0  # Every 30 seconds for DCA (low frequency)
+  snapshot_count: 3
+  state_dir: "data/state"
+
+# --- Memory ---
+memory:
+  check_interval: 60
+  warn_mb: 500
+  restart_mb: 1000
+  max_candles_per_tf: 500
+  cache_clear_hours: 24
+
+# --- Heartbeat ---
+heartbeat:
+  interval: 60        # Every 60 seconds (low-urgency strategy)
+  timeout: 180
+  max_restarts_per_hour: 3
+
+# --- Rate Limiting ---
+rate_limit_weight_per_min: 50
+rate_limit_burst_weight: 100
+
+# =============================================================================
+# Strategy-Specific Parameters
+# =============================================================================
+strategy_params:
+
+  # --- DCA Schedule ---
+  dca_schedule: "weekly"          # daily, weekly, bi-weekly, monthly
+  dca_day_of_week: 0              # 0=Monday (for weekly/bi-weekly)
+  dca_day_of_month: 1             # For monthly schedule
+  dca_hour_utc: 10                # Hour to execute DCA (UTC)
+  dca_minute_utc: 0               # Minute to execute DCA (UTC)
+
+  # --- Mode ---
+  mode: "signal_enhanced"         # "signal_enhanced" or "value_averaging"
+
+  # --- Per-Instrument Base Amounts (USDT per interval) ---
+  base_amounts:
+    BTCUSDT: 50.0
+    ETHUSDT: 30.0
+    SOLUSDT: 10.0
+    BNBUSDT: 10.0
+
+  # --- Monthly Budget ---
+  monthly_dca_budget: 400.0       # Total DCA budget per month
+  monthly_crash_reserve: 200.0    # Separate crash-buy reserve per month
+  budget_cap_multiplier: 4.5      # Monthly cap = 4.5 * base * intervals/month
+
+  # --- Signal Multiplier Clamp ---
+  min_multiplier: 0.25
+  max_multiplier: 3.0
+
+  # --- Minimum Purchase ---
+  min_purchase_usdt: 5.0
+
+  # --- RSI Signal (14-period daily) ---
+  rsi_period: 14
+
+  # --- 200-Day SMA ---
+  sma_period: 200
+
+  # --- Crash-Buy Settings ---
+  crash_buy_enabled: true
+  crash_level_1_drop_pct: 10.0    # 10% from 7-day high
+  crash_level_1_lookback_days: 7
+  crash_level_1_amount_multiplier: 1.0
+  crash_level_1_cooldown_days: 7
+
+  crash_level_2_drop_pct: 20.0    # 20% from 30-day high
+  crash_level_2_lookback_days: 30
+  crash_level_2_amount_multiplier: 2.0
+  crash_level_2_cooldown_days: 14
+
+  crash_level_3_drop_pct: 30.0    # 30% from 90-day high
+  crash_level_3_lookback_days: 90
+  crash_level_3_amount_multiplier: 3.0
+  crash_level_3_cooldown_days: 30
+
+  # --- Value Averaging (alternative mode) ---
+  va_weekly_target: 100.0         # Target portfolio growth per week
+  va_max_purchase_multiplier: 3.0 # Cap at 3x weekly target
+
+  # --- Emergency Stop-Loss ---
+  emergency_stop_enabled: true
+  emergency_stop_pct: 50.0        # Halt if portfolio < 50% of invested
+
+  # --- Take-Profit Rebalancing ---
+  take_profit_enabled: true
+  take_profit_threshold_pct: 200.0  # Portfolio 3x invested
+  take_profit_sell_pct: 10.0        # Sell 10% of holdings
+  take_profit_max_frequency_days: 90  # Once per quarter
+
+  # --- Exchange Health ---
+  max_spread_pct: 0.1             # Max bid-ask spread before delaying
+  spread_delay_minutes: 60        # Delay if spread too wide
+
+  # --- Signal Freshness ---
+  rsi_max_age_hours: 4.0
+  fg_max_age_hours: 24.0
+  sma_max_age_hours: 24.0
+
+  # --- Schedule Adherence ---
+  max_schedule_delay_minutes: 60  # Skip if > 1 hour late
+  double_execution_window_hours: 6.0  # Prevent double-exec within 6h
+
+  # --- Order Failure Circuit Breaker ---
+  max_order_failures: 3
+  order_failure_halt_hours: 24
+
+  # --- On-chain (optional) ---
+  sopr_enabled: false
+  glassnode_api_key: ""
+
+  # --- Diversification ---
+  max_single_asset_pct: 60.0
+  min_instruments: 2

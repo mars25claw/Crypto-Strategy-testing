@@ -1,0 +1,197 @@
+# ============================================================================
+# STRAT-003: Statistical Arbitrage Pairs Trading Bot Configuration
+# ============================================================================
+
+strategy_id: "STRAT-003"
+strategy_name: "Statistical Arbitrage Pairs Trading"
+mode: "paper"  # "paper" or "live"
+
+# Universe of assets for pair screening (top 20 by market cap)
+instruments:
+  - "BTCUSDT"
+  - "ETHUSDT"
+  - "BNBUSDT"
+  - "SOLUSDT"
+  - "XRPUSDT"
+  - "ADAUSDT"
+  - "AVAXUSDT"
+  - "DOTUSDT"
+  - "LINKUSDT"
+  - "MATICUSDT"
+  - "ARBUSDT"
+  - "DOGEUSDT"
+  - "SHIBUSDT"
+  - "LTCUSDT"
+  - "ATOMUSDT"
+  - "NEARUSDT"
+  - "UNIUSDT"
+  - "OPUSDT"
+  - "APTUSDT"
+  - "FILUSDT"
+
+# ── Binance connection ─────────────────────────────────────────────────────
+binance:
+  api_key: ""       # Override via BINANCE_API_KEY env var
+  api_secret: ""    # Override via BINANCE_API_SECRET env var
+  testnet: false
+  spot_base_url: "https://api.binance.com"
+  futures_base_url: "https://fapi.binance.com"
+  spot_ws_url: "wss://stream.binance.com:9443"
+  futures_ws_url: "wss://fstream.binance.com"
+  recv_window: 5000
+  time_sync_interval: 60
+
+# ── Risk management ────────────────────────────────────────────────────────
+risk:
+  max_capital_pct: 25.0        # Max capital for this strategy
+  max_per_trade_pct: 5.0       # Max capital per pair
+  risk_per_trade_pct: 2.0      # Max dollar loss per pair trade
+  max_leverage: 3              # Max leverage per leg
+  preferred_leverage: 2        # Preferred leverage per leg
+  max_concurrent_positions: 20 # 10 pairs x 2 legs each
+  max_per_asset_pct: 10.0      # Single asset across all pairs
+  max_long_exposure_pct: 15.0
+  max_short_exposure_pct: 15.0
+  max_net_directional_pct: 5.0
+  daily_drawdown_pct: 2.5
+  weekly_drawdown_pct: 5.0
+  monthly_drawdown_pct: 8.0
+  system_wide_drawdown_pct: 15.0
+
+# ── Paper trading ──────────────────────────────────────────────────────────
+paper_trading:
+  enabled: true
+  starting_equity: 100000.0
+  maker_fee_pct: 0.02
+  taker_fee_pct: 0.04
+  slippage_model: "orderbook_walk"
+
+# ── Dashboard ──────────────────────────────────────────────────────────────
+dashboard:
+  host: "0.0.0.0"
+  port: 8083
+  enable_kill_switch: true
+
+# ── Alerting ───────────────────────────────────────────────────────────────
+alerting:
+  enabled: true
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  discord_webhook_url: ""
+
+# ── Database ───────────────────────────────────────────────────────────────
+database:
+  url: "sqlite:///data/strat003.db"
+  echo: false
+
+# ── Logging ────────────────────────────────────────────────────────────────
+logging:
+  level: "INFO"
+  log_dir: "data/logs"
+  rotate_days: 30
+  trade_log_permanent: true
+
+# ── State persistence ──────────────────────────────────────────────────────
+state:
+  persistence_interval: 5.0
+  snapshot_count: 3
+  state_dir: "data/state"
+
+# ── Memory management ─────────────────────────────────────────────────────
+memory:
+  check_interval: 60
+  warn_mb: 500
+  restart_mb: 1000
+  max_candles_per_tf: 500
+  cache_clear_hours: 24
+
+# ── Heartbeat ──────────────────────────────────────────────────────────────
+heartbeat:
+  interval: 10
+  timeout: 30
+  max_restarts_per_hour: 3
+
+# ── Rate limiting ──────────────────────────────────────────────────────────
+rate_limit_weight_per_min: 200
+rate_limit_burst_weight: 500   # Burst for daily requalification
+
+# ── Strategy-specific parameters ───────────────────────────────────────────
+strategy_params:
+  # Cointegration testing
+  lookback_days: 180
+  adf_p_threshold: 0.05
+  adf_p_preferred: 0.01
+  half_life_min: 3
+  half_life_max: 30
+  hurst_reject: 0.5
+  hurst_ideal: 0.4
+  correlation_min: 0.6
+  correlation_pct_threshold: 80
+  correlation_recent_reject: 0.4
+
+  # Pair limits
+  max_qualified_pairs: 15
+  max_active_pairs: 10
+  reserve_pairs: 5
+
+  # Spread monitoring
+  z_score_entry: 2.0
+  z_score_exit: 0.5
+  z_score_hard_stop: 3.5
+  z_score_circuit_breaker: 5.0
+  z_score_opposite: 2.0
+  z_score_post_stop_entry: 2.5
+  rolling_window: 50           # 50-period rolling for mu/sigma on 1h
+
+  # Entry confirmation
+  z_persistence_bars: 2
+  volume_multiplier: 1.2
+  regime_change_pct: 10.0
+  regime_change_hours: 24
+
+  # Execution
+  simultaneous_window_ms: 200
+  limit_timeout_s: 60
+  hedge_correction_threshold: 0.05
+
+  # Exit
+  dollar_stop_pct: 1.5
+  time_exit_multiplier: 2.0
+  partial_exit_pct: 50.0
+  cointegration_breakdown_adf_p: 0.10
+  breakdown_exit_hours: 4
+
+  # Rebalancing
+  beta_drift_threshold: 0.10
+  max_rebalances_per_trade: 2
+  rebalance_max_pct: 20.0
+
+  # Circuit breakers
+  spread_explosion_z: 5.0
+  spread_explosion_halt_hours: 24
+  multi_stop_count: 3
+  multi_stop_window_hours: 24
+  multi_stop_halt_hours: 48
+  btc_flash_pct: 8.0
+  btc_flash_window_hours: 4
+  btc_flash_halt_hours: 4
+
+  # Filters
+  min_spread_bps: 5            # 0.05% max bid-ask spread
+  min_24h_volume: 30000000     # $30M minimum
+  fee_multiplier: 3.0
+  taker_fee_pct: 0.04
+  consecutive_loss_reduce: 3
+  consecutive_loss_halt: 5
+  high_correlation_regime: 0.90
+
+  # Broken pair blacklist duration
+  broken_pair_days: 30
+
+  # Paper trading go-live criteria
+  paper_min_days: 60
+  paper_min_trades: 30
+  paper_min_pf: 1.3
+  paper_min_win_rate: 0.50
+  paper_min_sharpe: 1.0
+  paper_max_dd: 8.0
