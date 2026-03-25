@@ -3,7 +3,7 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # Python dependencies — pre-install heavy packages from binary wheels
-COPY requirements.txt .
+COPY strat_010_ml_onchain/requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --only-binary=:all: numpy pandas scipy scikit-learn 2>/dev/null || true && \
     pip install --no-cache-dir --no-build-isolation -r requirements.txt

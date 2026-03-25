@@ -2,6 +2,7 @@ FROM python:3.11-slim-bookworm
 
 # Prevent Python from buffering stdout/stderr
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 ENV PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app

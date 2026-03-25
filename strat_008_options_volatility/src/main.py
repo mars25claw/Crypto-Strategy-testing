@@ -129,8 +129,8 @@ class OptionsVolatilityBot:
 
         # 2. Rate limiter
         self._rate_limiter = RateLimiter(
-            weight_per_min=self._config.rate_limit_weight_per_min,
-            burst_weight=self._config.rate_limit_burst_weight,
+            budget=self._config.rate_limit_weight_per_min,
+            burst=self._config.rate_limit_burst_weight,
         )
 
         # 3. Binance client

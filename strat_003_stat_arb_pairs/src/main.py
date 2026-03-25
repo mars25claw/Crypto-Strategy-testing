@@ -80,8 +80,8 @@ class StatArbBot:
         self._time_sync = TimeSync()
         self._exchange_info = ExchangeInfo()
         self._rate_limiter = RateLimiter(
-            weight_per_minute=self._cfg.rate_limit_weight_per_min,
-            burst_weight=self._cfg.rate_limit_burst_weight,
+            budget=self._cfg.rate_limit_weight_per_min,
+            burst=self._cfg.rate_limit_burst_weight,
         )
 
         self._client = BinanceClient(

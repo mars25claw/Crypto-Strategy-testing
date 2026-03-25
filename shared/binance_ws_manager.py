@@ -233,7 +233,13 @@ class WebSocketManager:
         """
         state = self._connections.get(conn_type)
         if state is None:
-            raise ValueError(f"Unknown connection type: {conn_type}")
+            # User data streams (SPOT_USER, FUTURES_USER) are not yet
+            # initialised — log and skip so paper-mode strategies can start.
+            logger.info(
+                "Strategy %s: %s connection not initialised (paper mode — skipping)",
+                strategy_id, conn_type.value,
+            )
+            return
 
         reg = state.strategies.get(strategy_id)
         if reg is None:
@@ -260,6 +266,21 @@ class WebSocketManager:
             self._ensure_connection_task(state)
             # Schedule subscribe in background so this stays sync-friendly
             asyncio.ensure_future(self._subscribe_streams(state, [s.lower() for s, _ in subscriptions]))
+
+    def register_user_data_stream(
+        self,
+        strategy_id: str,
+        conn_type: ConnectionType = ConnectionType.FUTURES,
+        callbacks: Optional[Dict[str, Callable[..., Coroutine]]] = None,
+    ) -> None:
+        """Register user data stream callbacks (e.g. ORDER_TRADE_UPDATE).
+
+        In paper trading mode this is a no-op since no real orders are placed.
+        """
+        logger.info(
+            "Strategy %s: user data stream registration for %s (paper mode — no-op)",
+            strategy_id, conn_type.value,
+        )
 
     def unregister_strategy(
         self,

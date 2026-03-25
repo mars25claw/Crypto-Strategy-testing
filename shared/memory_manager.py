@@ -3,7 +3,12 @@
 import gc
 import os
 import time
-import psutil
+try:
+    import psutil
+    _PSUTIL_AVAILABLE = True
+except ImportError:
+    psutil = None
+    _PSUTIL_AVAILABLE = False
 import logging
 import asyncio
 from typing import Optional, Callable, Awaitable
@@ -33,7 +38,7 @@ class MemoryManager:
         self.restart_mb = restart_mb
         self.cache_clear_hours = cache_clear_hours
         self.on_restart = on_restart
-        self._process = psutil.Process(os.getpid())
+        self._process = psutil.Process(os.getpid()) if _PSUTIL_AVAILABLE else None
         self._last_cache_clear = time.time()
         self._cache_clear_callbacks: list = []
         self._running = False
@@ -44,6 +49,8 @@ class MemoryManager:
 
     def get_memory_mb(self) -> float:
         """Get current process memory usage in MB."""
+        if self._process is None:
+            return 0.0
         return self._process.memory_info().rss / (1024 * 1024)
 
     async def start(self):
@@ -111,3 +118,7 @@ class MemoryManager:
             "status": "critical" if mem_mb >= self.restart_mb else "warning" if mem_mb >= self.warn_mb else "ok",
             "last_cache_clear": self._last_cache_clear,
         }
+
+    async def check(self) -> None:
+        """Compatibility shim — run a memory check cycle."""
+        await self._check()

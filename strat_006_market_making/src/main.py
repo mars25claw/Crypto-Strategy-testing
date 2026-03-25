@@ -185,11 +185,7 @@ class MarketMakingBot:
         )
 
         # ── Alert manager ──
-        self._alerting = AlertManager(
-            telegram_token=self._cfg.alerting.telegram_bot_token,
-            telegram_chat_id=self._cfg.alerting.telegram_chat_id,
-            discord_webhook=self._cfg.alerting.discord_webhook_url,
-        ) if self._cfg.alerting.enabled else None
+        self._alerting = AlertManager(self._cfg.alerting, STRATEGY_ID) if self._cfg.alerting.enabled else None
 
         # ── Memory manager ──
         self._memory = MemoryManager(
@@ -199,9 +195,8 @@ class MarketMakingBot:
 
         # ── Kill switch ──
         self._kill_switch = KillSwitch(
-            client=self._client,
-            symbols=list(self._cfg.instruments),
-            rate_limiter=self._rate_limiter,
+            binance_client=self._client,
+            database_manager=self._db,
         )
 
         # ── Heartbeat ──
@@ -494,7 +489,7 @@ class MarketMakingBot:
                 self._save_state()
 
                 # Check memory
-                self._memory.check()
+                await self._memory.check()
 
                 # Config hot-reload
                 self._config_loader.check_reload()
@@ -604,9 +599,8 @@ class MarketMakingBot:
             inst.halt_reason = blow_reason
 
             if self._alerting:
-                await self._alerting.send_alert(
-                    f"STRAT-006 CRITICAL: {blow_reason}",
-                    level="critical",
+                await self._alerting.send(
+                    "critical", f"Blowout: {symbol}", blow_reason,
                 )
             return
 
@@ -860,9 +854,8 @@ class MarketMakingBot:
                     inst.halt_reason = halt_reason
 
                     if self._alerting:
-                        await self._alerting.send_alert(
-                            f"STRAT-006 CRITICAL: {halt_reason}",
-                            level="critical",
+                        await self._alerting.send(
+                            "critical", "Strategy Halted", halt_reason,
                         )
             else:
                 # Reset failure count on success
@@ -995,9 +988,8 @@ class MarketMakingBot:
 
         # Alert
         if self._alerting:
-            await self._alerting.send_alert(
-                f"STRAT-006 CRITICAL: {symbol} delisted — inventory closed, quoting ceased",
-                level="critical",
+            await self._alerting.send(
+                "critical", f"Delisted: {symbol}", f"{symbol} delisted — inventory closed, quoting ceased",
             )
 
     # ==================================================================
@@ -1030,9 +1022,8 @@ class MarketMakingBot:
                     await self._quote_manager.cancel_all_instruments()
 
                     if self._alerting:
-                        await self._alerting.send_alert(
-                            f"STRAT-006 CRITICAL: {reason}",
-                            level="critical",
+                        await self._alerting.send(
+                            "critical", "Circuit Breaker", reason,
                         )
                 elif reason:
                     # Fee changed but not halting — update min spread in strategy
@@ -1444,9 +1435,8 @@ class MarketMakingBot:
         """Called when adverse selection threshold hit — widen spreads 50%."""
         logger.warning("Adverse selection WIDEN triggered for %s", symbol)
         if self._alerting:
-            await self._alerting.send_alert(
-                f"STRAT-006 ADVERSE: {symbol} rate >60% — widening spreads 50%",
-                level="warning",
+            await self._alerting.send(
+                "warning", f"Adverse Selection: {symbol}", f"{symbol} rate >60% — widening spreads 50%",
             )
 
     async def _on_adverse_halt(self, symbol: str) -> None:
@@ -1458,9 +1448,8 @@ class MarketMakingBot:
             inst.is_active = False
             inst.halt_reason = "Adverse selection >70%"
         if self._alerting:
-            await self._alerting.send_alert(
-                f"STRAT-006 HALT: {symbol} adverse selection >70% — instrument halted",
-                level="critical",
+            await self._alerting.send(
+                "critical", f"Adverse Halt: {symbol}", f"{symbol} adverse selection >70% — instrument halted",
             )
 
     # ==================================================================

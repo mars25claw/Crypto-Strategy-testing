@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 import traceback
@@ -36,7 +37,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-import psutil
+try:
+    import psutil
+    _PSUTIL_AVAILABLE = True
+except ImportError:
+    psutil = None
+    _PSUTIL_AVAILABLE = False
 import uvicorn
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -254,6 +260,8 @@ class DashboardBase:
 
     def _memory_mb(self) -> float:
         try:
+            if not _PSUTIL_AVAILABLE:
+                return 0.0
             proc = psutil.Process(os.getpid())
             return round(proc.memory_info().rss / (1024 * 1024), 1)
         except Exception:

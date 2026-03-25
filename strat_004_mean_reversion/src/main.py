@@ -203,8 +203,8 @@ class MeanReversionBot:
 
         # Rate limiter
         self._rate_limiter = RateLimiter(
-            weight_per_minute=cfg.rate_limit_weight_per_min,
-            burst_weight=cfg.rate_limit_burst_weight,
+            budget=cfg.rate_limit_weight_per_min,
+            burst=cfg.rate_limit_burst_weight,
         )
 
         # Binance REST client

@@ -164,8 +164,8 @@ class TrendBot:
 
         # Rate limiter
         self.rate_limiter = RateLimiter(
-            futures_budget=self.config.rate_limit_weight_per_min,
-            futures_burst=self.config.rate_limit_burst_weight,
+            budget=self.config.rate_limit_weight_per_min,
+            burst=self.config.rate_limit_burst_weight,
         )
 
         # Binance REST client
@@ -188,7 +188,7 @@ class TrendBot:
 
         # Alerting
         from shared.alerting import AlertManager
-        self.alerter = AlertManager(self.config.alerting)
+        self.alerter = AlertManager(self.config.alerting, "STRAT-001")
 
         # Paper trading engine
         if self.config.mode == "paper":
@@ -294,7 +294,6 @@ class TrendBot:
 
         # Memory manager
         self.memory_mgr = MemoryManager(
-            strategy_id=STRATEGY_ID,
             check_interval=self.config.memory.check_interval,
             warn_mb=self.config.memory.warn_mb,
             restart_mb=self.config.memory.restart_mb,
@@ -391,9 +390,9 @@ class TrendBot:
                 )
                 if self.alerter:
                     await self.alerter.send(
-                        f"Reconciliation completed with {len(result.discrepancies)} discrepancies",
                         level=AlertLevel.WARNING,
-                        strategy_id=STRATEGY_ID,
+                        title="Reconciliation discrepancies",
+                        message=f"Reconciliation completed with {len(result.discrepancies)} discrepancies",
                     )
             else:
                 logger.info("Reconciliation complete — no issues (%dms)", result.duration_ms)
@@ -402,9 +401,9 @@ class TrendBot:
             logger.critical("Reconciliation timed out at 60s — halting")
             if self.alerter:
                 await self.alerter.send(
-                    "Reconciliation timeout — manual intervention required",
                     level=AlertLevel.EMERGENCY,
-                    strategy_id=STRATEGY_ID,
+                    title="Reconciliation timeout",
+                    message="Reconciliation timeout — manual intervention required",
                 )
             raise
 
@@ -414,42 +413,41 @@ class TrendBot:
 
     async def _register_ws_streams(self) -> None:
         """Register all required streams with the WS manager."""
-        streams = []
+        from shared.binance_ws_manager import ConnectionType
+
+        subscriptions = []
         for symbol in self.config.instruments:
             sym_lower = symbol.lower()
-            streams.extend([
-                f"{sym_lower}@kline_1m",
-                f"{sym_lower}@kline_15m",
-                f"{sym_lower}@kline_4h",
-                f"{sym_lower}@kline_1d",
-                f"{sym_lower}@depth20@100ms",
-                f"{sym_lower}@aggTrade",
-                f"{sym_lower}@markPrice@1s",
-                f"{sym_lower}@bookTicker",
+            subscriptions.extend([
+                (f"{sym_lower}@kline_1m", self._on_kline),
+                (f"{sym_lower}@kline_15m", self._on_kline),
+                (f"{sym_lower}@kline_4h", self._on_kline),
+                (f"{sym_lower}@kline_1d", self._on_kline),
+                (f"{sym_lower}@depth20@100ms", self._on_depth),
+                (f"{sym_lower}@aggTrade", self._on_agg_trade),
+                (f"{sym_lower}@markPrice@1s", self._on_mark_price),
+                (f"{sym_lower}@bookTicker", self._on_book_ticker),
             ])
 
         logger.info(
             "Registering %d streams for %d instruments with WS manager",
-            len(streams), len(self.config.instruments),
+            len(subscriptions), len(self.config.instruments),
         )
 
-        await self.ws_manager.register_strategy(
+        self.ws_manager.register_strategy(
             strategy_id=STRATEGY_ID,
-            streams=streams,
-            callbacks={
-                "kline": self._on_kline,
-                "aggTrade": self._on_agg_trade,
-                "markPrice": self._on_mark_price,
-                "bookTicker": self._on_book_ticker,
-                "depth": self._on_depth,
-                "forceOrder": self._on_force_order,
-            },
+            subscriptions=subscriptions,
+            conn_type=ConnectionType.FUTURES,
         )
 
-        # Also register for user data stream
-        await self.ws_manager.register_user_data_callback(
-            strategy_id=STRATEGY_ID,
-            callback=self._on_user_data,
+        # Also register user data stream
+        self.ws_manager.register_strategy(
+            strategy_id=f"{STRATEGY_ID}_user",
+            subscriptions=[
+                ("ORDER_TRADE_UPDATE", self._on_user_data),
+                ("ACCOUNT_UPDATE", self._on_user_data),
+            ],
+            conn_type=ConnectionType.FUTURES_USER,
         )
 
     # ======================================================================
@@ -549,9 +547,9 @@ class TrendBot:
             logger.critical("MARGIN CALL received: %s", data)
             if self.alerter:
                 await self.alerter.send(
-                    f"MARGIN CALL: {data}",
                     level=AlertLevel.EMERGENCY,
-                    strategy_id=STRATEGY_ID,
+                    title="MARGIN CALL",
+                    message=f"MARGIN CALL: {data}",
                 )
 
     # ======================================================================
@@ -748,12 +746,14 @@ class TrendBot:
         # Alert
         if self.alerter:
             await self.alerter.send(
-                f"ENTRY {symbol} {signal.direction.value}: qty={fill_qty:.6f} "
-                f"@ {fill_price:.4f}, stop={pos.hard_stop_price:.4f}, "
-                f"TP1={pos.tp.tp1_price:.4f}, lev={size_result.leverage}x, "
-                f"risk={size_result.risk_pct:.2f}%",
                 level=AlertLevel.INFO,
-                strategy_id=STRATEGY_ID,
+                title=f"ENTRY {symbol} {signal.direction.value}",
+                message=(
+                    f"ENTRY {symbol} {signal.direction.value}: qty={fill_qty:.6f} "
+                    f"@ {fill_price:.4f}, stop={pos.hard_stop_price:.4f}, "
+                    f"TP1={pos.tp.tp1_price:.4f}, lev={size_result.leverage}x, "
+                    f"risk={size_result.risk_pct:.2f}%"
+                ),
             )
 
         trade_logger.info(
@@ -836,9 +836,9 @@ class TrendBot:
 
         if self.alerter:
             await self.alerter.send(
-                f"Indicator anomaly halt for {symbol} — recalculating from raw data",
                 level=AlertLevel.WARNING,
-                strategy_id=STRATEGY_ID,
+                title="Indicator anomaly",
+                message=f"Indicator anomaly halt for {symbol} — recalculating from raw data",
             )
 
         success = True
@@ -884,9 +884,9 @@ class TrendBot:
             )
             if self.alerter:
                 await self.alerter.send(
-                    f"{symbol} indicator recalculation successful — resuming",
                     level=AlertLevel.INFO,
-                    strategy_id=STRATEGY_ID,
+                    title="Indicator recalculation OK",
+                    message=f"{symbol} indicator recalculation successful — resuming",
                 )
         else:
             logger.critical(
@@ -894,10 +894,9 @@ class TrendBot:
             )
             if self.alerter:
                 await self.alerter.send(
-                    f"CRITICAL: {symbol} indicator recalculation failed — "
-                    f"manual intervention required",
                     level=AlertLevel.CRITICAL,
-                    strategy_id=STRATEGY_ID,
+                    title="Indicator recalculation failed",
+                    message=f"CRITICAL: {symbol} indicator recalculation failed — manual intervention required",
                 )
 
     # ======================================================================
@@ -955,9 +954,9 @@ class TrendBot:
                 )
                 if self.alerter:
                     await self.alerter.send(
-                        f"Go-live criteria met — all checks passed. Results: {results}",
                         level=AlertLevel.INFO,
-                        strategy_id=STRATEGY_ID,
+                        title="Go-live criteria met",
+                        message=f"Go-live criteria met — all checks passed. Results: {results}",
                     )
 
     def switch_mode(self, new_mode: str) -> bool:
@@ -1120,9 +1119,9 @@ class TrendBot:
 
         if self.alerter:
             await self.alerter.send(
-                f"EMERGENCY SHUTDOWN: {reason}",
                 level=AlertLevel.EMERGENCY,
-                strategy_id=STRATEGY_ID,
+                title="EMERGENCY SHUTDOWN",
+                message=f"EMERGENCY SHUTDOWN: {reason}",
             )
 
         # Close all positions
@@ -1195,10 +1194,12 @@ class TrendBot:
 
             if self.alerter:
                 await self.alerter.send(
-                    f"STRAT-001 started in {self.config.mode} mode. "
-                    f"Monitoring {len(self.config.instruments)} instruments.",
                     level=AlertLevel.INFO,
-                    strategy_id=STRATEGY_ID,
+                    title="STRAT-001 started",
+                    message=(
+                        f"STRAT-001 started in {self.config.mode} mode. "
+                        f"Monitoring {len(self.config.instruments)} instruments."
+                    ),
                 )
 
             # Wait for shutdown signal
@@ -1213,9 +1214,9 @@ class TrendBot:
             logger.critical("Fatal error: %s", e, exc_info=True)
             if self.alerter:
                 await self.alerter.send(
-                    f"FATAL ERROR: {e}",
                     level=AlertLevel.EMERGENCY,
-                    strategy_id=STRATEGY_ID,
+                    title="FATAL ERROR",
+                    message=str(e),
                 )
             raise
         finally:

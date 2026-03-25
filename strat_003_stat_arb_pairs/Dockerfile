@@ -6,7 +6,7 @@ LABEL strategy="STRAT-003-STAT-ARB"
 WORKDIR /app
 
 # Install Python deps first (layer caching) — use binary wheels for heavy packages
-COPY requirements.txt .
+COPY strat_003_stat_arb_pairs/requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --only-binary=:all: numpy pandas scipy scikit-learn 2>/dev/null || true && \
     pip install --no-cache-dir --no-build-isolation -r requirements.txt

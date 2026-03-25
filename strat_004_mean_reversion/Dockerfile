@@ -7,7 +7,7 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # Install Python dependencies
-COPY requirements.txt .
+COPY strat_004_mean_reversion/requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --only-binary=:all: numpy pandas scipy scikit-learn 2>/dev/null || true && \
     pip install --no-cache-dir -r requirements.txt

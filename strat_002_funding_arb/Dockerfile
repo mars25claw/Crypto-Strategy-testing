@@ -3,7 +3,7 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # Python dependencies
-COPY requirements.txt .
+COPY strat_002_funding_arb/requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --only-binary=:all: numpy pandas scipy scikit-learn 2>/dev/null || true && \
     pip install --no-cache-dir -r requirements.txt

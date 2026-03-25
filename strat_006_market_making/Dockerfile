@@ -26,5 +26,7 @@ EXPOSE 8086
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD python -c "import httpx; r = httpx.get('http://localhost:8086/health'); r.raise_for_status()" || exit 1
 
+ENV PYTHONPATH=/app
+
 # Run the bot
 CMD ["python", "-m", "src.main"]

@@ -47,12 +47,14 @@ class PairPosition:
     leg_a_side: str           # "BUY" or "SELL"
     leg_a_qty: float
     leg_a_entry_price: float
-    leg_a_fill_time: float = 0.0
 
     # Leg B
     leg_b_side: str           # "BUY" or "SELL"
     leg_b_qty: float
     leg_b_entry_price: float
+
+    # Fill times (defaults)
+    leg_a_fill_time: float = 0.0
     leg_b_fill_time: float = 0.0
 
     # Running state

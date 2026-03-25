@@ -20,7 +20,6 @@ numpy>=1.24.0,<2.0
 pyyaml>=6.0,<7.0
 
 # System monitoring
-psutil>=5.9.0,<6.0
 
 # Scheduling
 apscheduler>=3.10.0,<4.0

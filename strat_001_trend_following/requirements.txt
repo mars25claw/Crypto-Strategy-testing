@@ -20,7 +20,6 @@ uvicorn[standard]>=0.24.0,<1.0
 jinja2>=3.1.0,<4.0
 
 # Monitoring
-psutil>=5.9.0,<6.0
 
 # Alerting (optional channels)
 python-telegram-bot>=20.0,<22.0

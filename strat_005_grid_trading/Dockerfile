@@ -3,7 +3,7 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # Python deps
-COPY requirements.txt .
+COPY strat_005_grid_trading/requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --only-binary=:all: numpy pandas scipy scikit-learn 2>/dev/null || true && \
     pip install --no-cache-dir -r requirements.txt
@@ -15,7 +15,8 @@ COPY shared/ /app/shared/
 COPY strat_005_grid_trading/ /app/strat_005_grid_trading/
 
 # Create data directories
-RUN mkdir -p /app/data/state /app/data/logs /app/data/shared
+RUN mkdir -p /app/data/state /app/data/logs /app/data/shared \
+             /app/strat_005_grid_trading/data
 
 WORKDIR /app/strat_005_grid_trading
 

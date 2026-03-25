@@ -4,7 +4,7 @@ FROM python:3.11-slim-bookworm
 WORKDIR /app
 
 # Copy requirements first for Docker layer caching
-COPY requirements.txt .
+COPY strat_009_signal_dca/requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --only-binary=:all: numpy pandas scipy scikit-learn 2>/dev/null || true && \
     pip install --no-cache-dir -r requirements.txt
