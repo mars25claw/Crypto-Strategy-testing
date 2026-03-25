@@ -1,11 +1,6 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
 
 # Copy shared library
 COPY shared/ /app/shared/
@@ -13,9 +8,11 @@ COPY shared/ /app/shared/
 # Copy strategy files
 COPY strat_008_options_volatility/ /app/strat_008_options_volatility/
 
-# Install Python dependencies
+# Install Python dependencies — use binary wheels for heavy packages
 COPY strat_008_options_volatility/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --only-binary=:all: numpy pandas scipy scikit-learn 2>/dev/null || true && \
+    pip install --no-cache-dir --no-build-isolation -r requirements.txt
 
 # Set working directory to strategy
 WORKDIR /app/strat_008_options_volatility

@@ -1,21 +1,18 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 
-# System deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
 # Python deps
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --only-binary=:all: numpy pandas scipy scikit-learn 2>/dev/null || true && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy shared library
-COPY ../shared /app/shared
+COPY shared/ /app/shared/
 
 # Copy strategy code
-COPY . /app/strat_005_grid_trading
+COPY strat_005_grid_trading/ /app/strat_005_grid_trading/
 
 # Create data directories
 RUN mkdir -p /app/data/state /app/data/logs /app/data/shared

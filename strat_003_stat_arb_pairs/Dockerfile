@@ -1,24 +1,21 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 LABEL maintainer="quant-desk"
 LABEL strategy="STRAT-003-STAT-ARB"
 
-# System dependencies for scipy/statsmodels
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ gfortran libopenblas-dev liblapack-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
-# Install Python deps first (layer caching)
+# Install Python deps first (layer caching) — use binary wheels for heavy packages
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --only-binary=:all: numpy pandas scipy scikit-learn 2>/dev/null || true && \
+    pip install --no-cache-dir --no-build-isolation -r requirements.txt
 
 # Copy shared library
-COPY ../shared /app/shared
+COPY shared/ /app/shared/
 
 # Copy strategy code
-COPY . /app/strat_003_stat_arb_pairs
+COPY strat_003_stat_arb_pairs/ /app/strat_003_stat_arb_pairs/
 
 WORKDIR /app/strat_003_stat_arb_pairs
 

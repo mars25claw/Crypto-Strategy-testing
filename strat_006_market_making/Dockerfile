@@ -1,18 +1,15 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
 
 # Copy shared library first (changes less frequently)
 COPY shared/ /app/shared/
 
 # Copy strategy requirements and install
 COPY strat_006_market_making/requirements.txt /app/strat_006_market_making/
-RUN pip install --no-cache-dir -r /app/strat_006_market_making/requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --only-binary=:all: numpy pandas scipy scikit-learn 2>/dev/null || true && \
+    pip install --no-cache-dir -r /app/strat_006_market_making/requirements.txt
 
 # Copy strategy code
 COPY strat_006_market_making/ /app/strat_006_market_making/

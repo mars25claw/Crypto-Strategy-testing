@@ -1,24 +1,21 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc && \
-    rm -rf /var/lib/apt/lists/*
-
 # Copy requirements first for Docker layer caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --only-binary=:all: numpy pandas scipy scikit-learn 2>/dev/null || true && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy shared library
-COPY ../shared /app/shared
+COPY shared/ /app/shared/
 
 # Copy strategy source and templates
-COPY src/ /app/src/
-COPY templates/ /app/templates/
-COPY config.yaml /app/config.yaml
+COPY strat_009_signal_dca/src/ /app/src/
+COPY strat_009_signal_dca/templates/ /app/templates/
+COPY strat_009_signal_dca/config.yaml /app/config.yaml
 
 # Create data directories
 RUN mkdir -p /app/data/logs /app/data/state
